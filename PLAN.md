@@ -690,7 +690,7 @@ Checklist:
 - [x] Implement plain-text and compressed-text extraction
 - [x] Integrate PDF extraction adapter
 - [x] Integrate Office extraction adapter
-- [ ] Define index schema and index update strategy
+- [x] Define index schema and index update strategy
 - [ ] Use index hits as planner input without bypassing final verification
 
 ### Phase 5: Export/import bundle
