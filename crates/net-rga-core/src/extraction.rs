@@ -1,5 +1,12 @@
+use std::io::Read;
+
+use flate2::read::GzDecoder;
+
 use crate::contracts::{ContractError, ExtractedDocument, Extractor};
-use crate::domain::{CanonicalChunk, CanonicalContentKind, CanonicalDocument, DocumentMeta};
+use crate::domain::{
+    Anchor, AnchorKind, AnchorLocator, CanonicalChunk, CanonicalContentKind, CanonicalDocument,
+    DocumentMeta,
+};
 
 impl CanonicalDocument {
     pub fn from_extracted(
@@ -75,6 +82,18 @@ impl ExtractorRegistry {
             .find(|extractor| extractor.can_handle(meta, bytes))
             .map(|extractor| extractor.as_ref())
     }
+
+    pub fn extract(meta: &DocumentMeta, bytes: &[u8], extractors: &[Box<dyn Extractor>]) -> Result<CanonicalDocument, ContractError> {
+        match Self::sniff(meta, bytes) {
+            ExtractionPlan::PlainText => extract_plain_text(meta, bytes, CanonicalContentKind::Text),
+            ExtractionPlan::GzipText => extract_gzip_text(meta, bytes),
+            ExtractionPlan::Pdf => extract_with(meta, bytes, extractors, CanonicalContentKind::Pdf),
+            ExtractionPlan::Docx => extract_with(meta, bytes, extractors, CanonicalContentKind::Document),
+            ExtractionPlan::Pptx => extract_with(meta, bytes, extractors, CanonicalContentKind::Presentation),
+            ExtractionPlan::Xlsx => extract_with(meta, bytes, extractors, CanonicalContentKind::Spreadsheet),
+            ExtractionPlan::Unsupported(reason) => unsupported_document(reason),
+        }
+    }
 }
 
 fn is_plain_text(meta: &DocumentMeta, bytes: &[u8]) -> bool {
@@ -91,16 +110,91 @@ fn is_plain_text(meta: &DocumentMeta, bytes: &[u8]) -> bool {
         return true;
     }
 
-    std::str::from_utf8(bytes).is_ok()
+    !bytes.is_empty() && std::str::from_utf8(bytes).is_ok()
 }
 
 pub fn unsupported_document(reason: impl Into<String>) -> Result<CanonicalDocument, ContractError> {
     Err(ContractError::Unsupported(reason.into()))
 }
 
+fn extract_plain_text(
+    meta: &DocumentMeta,
+    bytes: &[u8],
+    content_kind: CanonicalContentKind,
+) -> Result<CanonicalDocument, ContractError> {
+    let text = match String::from_utf8(bytes.to_vec()) {
+        Ok(text) => text,
+        Err(_) => String::from_utf8_lossy(bytes).into_owned(),
+    };
+    Ok(canonicalize_text(meta, &text, content_kind, Vec::new()))
+}
+
+fn extract_gzip_text(meta: &DocumentMeta, bytes: &[u8]) -> Result<CanonicalDocument, ContractError> {
+    let mut decoder = GzDecoder::new(bytes);
+    let mut decoded = Vec::new();
+    decoder
+        .read_to_end(&mut decoded)
+        .map_err(|error| ContractError::Io(error.to_string()))?;
+    extract_plain_text(meta, &decoded, CanonicalContentKind::ArchiveText)
+}
+
+fn extract_with(
+    meta: &DocumentMeta,
+    bytes: &[u8],
+    extractors: &[Box<dyn Extractor>],
+    content_kind: CanonicalContentKind,
+) -> Result<CanonicalDocument, ContractError> {
+    let extractor = ExtractorRegistry::dispatch(meta, bytes, extractors)
+        .ok_or_else(|| ContractError::Unsupported("no matching extractor available".to_owned()))?;
+    let extracted = extractor.extract(bytes, meta)?;
+    Ok(CanonicalDocument::from_extracted(meta, content_kind, extracted))
+}
+
+fn canonicalize_text(
+    meta: &DocumentMeta,
+    text: &str,
+    content_kind: CanonicalContentKind,
+    warnings: Vec<String>,
+) -> CanonicalDocument {
+    let chunks = text
+        .lines()
+        .enumerate()
+        .map(|(line_index, line)| {
+            let anchor = Anchor {
+                kind: AnchorKind::LineSpan,
+                locator: AnchorLocator {
+                    path: Some(meta.locator.path.clone()),
+                    line_start: Some(u32::try_from(line_index + 1).unwrap_or(u32::MAX)),
+                    line_end: Some(u32::try_from(line_index + 1).unwrap_or(u32::MAX)),
+                    ..AnchorLocator::default()
+                },
+            };
+            CanonicalChunk {
+                anchor_ref: anchor.stable_ref(),
+                anchor,
+                text: line.to_owned(),
+            }
+        })
+        .collect();
+
+    CanonicalDocument {
+        document_id: meta.id.clone(),
+        locator: meta.locator.clone(),
+        content_kind,
+        text: text.to_owned(),
+        chunks,
+        warnings,
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use crate::domain::{DocumentId, DocumentLocator, DocumentMeta};
+    use flate2::Compression;
+    use flate2::write::GzEncoder;
+
+    use std::io::Write;
+
+    use crate::domain::{CanonicalContentKind, DocumentId, DocumentLocator, DocumentMeta};
 
     use super::{ExtractionPlan, ExtractorRegistry};
 
@@ -136,5 +230,42 @@ mod tests {
             ExtractorRegistry::sniff(&meta("docs/report.docx", Some("docx"), None), b"PK\x03\x04"),
             ExtractionPlan::Docx
         );
+    }
+
+    #[test]
+    fn extracts_plain_text_into_line_chunks() {
+        let canonical = ExtractorRegistry::extract(
+            &meta("docs/report.txt", Some("txt"), Some("text/plain")),
+            b"riverglass appears here\nsecond line",
+            &[],
+        )
+        .unwrap_or_else(|error| panic!("text extraction should succeed: {error}"));
+
+        assert_eq!(canonical.document_id.0, "docs/report.txt");
+        assert_eq!(canonical.chunks.len(), 2);
+        assert_eq!(canonical.chunks[0].anchor.locator.line_start, Some(1));
+        assert_eq!(canonical.chunks[1].text, "second line");
+    }
+
+    #[test]
+    fn extracts_gzip_text_into_searchable_chunks() {
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+        encoder
+            .write_all(b"riverglass archive\nsecond line")
+            .unwrap_or_else(|error| panic!("gzip fixture should write: {error}"));
+        let compressed = encoder
+            .finish()
+            .unwrap_or_else(|error| panic!("gzip fixture should finish: {error}"));
+
+        let canonical = ExtractorRegistry::extract(
+            &meta("docs/report.gz", Some("gz"), Some("application/gzip")),
+            &compressed,
+            &[],
+        )
+        .unwrap_or_else(|error| panic!("gzip extraction should succeed: {error}"));
+
+        assert_eq!(canonical.content_kind, CanonicalContentKind::ArchiveText);
+        assert_eq!(canonical.chunks.len(), 2);
+        assert!(canonical.text.contains("riverglass archive"));
     }
 }

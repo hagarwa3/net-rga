@@ -5,9 +5,10 @@ use thiserror::Error;
 use crate::config::CorpusConfig;
 use crate::contracts::{ContractError, Provider};
 use crate::domain::{
-    Anchor, AnchorKind, AnchorLocator, CoverageCounts, CoverageStatus, DocumentMeta, SearchMatch,
-    SearchRequest, SearchResponse, SearchSummary,
+    CoverageCounts, CoverageStatus, DocumentMeta, SearchMatch, SearchRequest, SearchResponse,
+    SearchSummary,
 };
+use crate::extraction::ExtractorRegistry;
 use crate::providers::provider_from_config;
 use crate::runtime::{ConfigStore, RuntimePaths};
 use crate::state::{ManifestDb, ManifestError};
@@ -91,7 +92,7 @@ pub fn execute_search_with_provider(
     let total_candidates = u64::try_from(candidates.len()).unwrap_or_default();
 
     for document in candidates {
-        if !is_text_likely(&document) {
+        if !is_extractable_candidate(&document) {
             coverage_counts.unsupported_count += 1;
             continue;
         }
@@ -113,24 +114,27 @@ pub fn execute_search_with_provider(
             }
         };
 
-        let content = String::from_utf8_lossy(&payload.bytes);
-        for (line_index, line) in content.lines().enumerate() {
-            if !matcher.is_match(line) {
+        let canonical = match ExtractorRegistry::extract(&document, &payload.bytes, &[]) {
+            Ok(canonical) => canonical,
+            Err(ContractError::Unsupported(_)) => {
+                coverage_counts.unsupported_count += 1;
+                continue;
+            }
+            Err(_) => {
+                coverage_counts.failure_count += 1;
+                continue;
+            }
+        };
+
+        for chunk in canonical.chunks {
+            if !matcher.is_match(&chunk.text) {
                 continue;
             }
 
             matches.push(SearchMatch {
                 document_id: document.id.clone(),
-                anchor: Anchor {
-                    kind: AnchorKind::LineSpan,
-                    locator: AnchorLocator {
-                        path: Some(document.locator.path.clone()),
-                        line_start: Some(u32::try_from(line_index + 1).unwrap_or(u32::MAX)),
-                        line_end: Some(u32::try_from(line_index + 1).unwrap_or(u32::MAX)),
-                        ..AnchorLocator::default()
-                    },
-                },
-                snippet: line.to_owned(),
+                anchor: chunk.anchor,
+                snippet: chunk.text,
                 verified: true,
             });
 
@@ -173,7 +177,7 @@ pub fn execute_search_with_provider(
 fn ranking_key(document: &DocumentMeta, query_lower: &str) -> (u8, u8, u64, std::cmp::Reverse<u64>, String) {
     let path_lower = document.locator.path.to_ascii_lowercase();
     let path_matches_query = if path_lower.contains(query_lower) { 0 } else { 1 };
-    let supported_text_rank = if is_text_likely(document) { 0 } else { 1 };
+    let supported_text_rank = if is_extractable_candidate(document) { 0 } else { 1 };
     let size_rank = document.size_bytes;
     let modified_rank = std::cmp::Reverse(parse_modified_at(document.modified_at.as_deref()));
     (
@@ -260,16 +264,19 @@ fn matches_modified_time(request: &SearchRequest, document: &DocumentMeta) -> bo
     after_ok && before_ok
 }
 
-fn is_text_likely(document: &DocumentMeta) -> bool {
-    if let Some(content_type) = document.content_type.as_deref()
-        && content_type.starts_with("text/")
-    {
-        return true;
+fn is_extractable_candidate(document: &DocumentMeta) -> bool {
+    if let Some(content_type) = document.content_type.as_deref() {
+        if content_type.starts_with("text/") || content_type == "application/pdf" || content_type == "application/gzip" {
+            return true;
+        }
+        if content_type.starts_with("application/vnd.openxmlformats-officedocument") {
+            return true;
+        }
     }
 
     matches!(
         document.extension.as_deref(),
-        Some("csv" | "json" | "log" | "md" | "txt")
+        Some("csv" | "docx" | "gz" | "json" | "log" | "md" | "pdf" | "pptx" | "txt" | "xlsx" | "yaml" | "yml")
     )
 }
 
@@ -432,6 +439,21 @@ mod tests {
                 "docs/report.txt" => Ok(ReadPayload {
                     bytes: b"riverglass appears here\nanother line".to_vec(),
                 }),
+                "docs/report.gz" => {
+                    use flate2::Compression;
+                    use flate2::write::GzEncoder;
+                    use std::io::Write;
+
+                    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+                    encoder
+                        .write_all(b"riverglass archived here\nanother line")
+                        .unwrap_or_else(|error| panic!("gzip fixture should write: {error}"));
+                    Ok(ReadPayload {
+                        bytes: encoder
+                            .finish()
+                            .unwrap_or_else(|error| panic!("gzip fixture should finish: {error}")),
+                    })
+                }
                 "docs/missing.txt" => Err(ContractError::NotFound("gone".to_owned())),
                 "media/video.mp4" => Ok(ReadPayload { bytes: Vec::new() }),
                 _ => Err(ContractError::Unsupported("unknown document".to_owned())),
@@ -472,6 +494,17 @@ mod tests {
                     modified_at: Some("200".to_owned()),
                 },
                 crate::domain::DocumentMeta {
+                    id: DocumentId("docs/report.gz".to_owned()),
+                    locator: DocumentLocator {
+                        path: "docs/report.gz".to_owned(),
+                    },
+                    extension: Some("gz".to_owned()),
+                    content_type: Some("application/gzip".to_owned()),
+                    version: Some("v1".to_owned()),
+                    size_bytes: 42,
+                    modified_at: Some("200".to_owned()),
+                },
+                crate::domain::DocumentMeta {
                     id: DocumentId("docs/missing.txt".to_owned()),
                     locator: DocumentLocator {
                         path: "docs/missing.txt".to_owned(),
@@ -497,9 +530,10 @@ mod tests {
         )
         .unwrap_or_else(|error| panic!("search should execute: {error}"));
 
-        assert_eq!(response.matches.len(), 1);
+        assert_eq!(response.matches.len(), 2);
         assert_eq!(response.matches[0].document_id.0, "docs/report.txt");
-        assert_eq!(response.summary.fetched_candidates, 2);
+        assert_eq!(response.matches[1].document_id.0, "docs/report.gz");
+        assert_eq!(response.summary.fetched_candidates, 3);
         assert_eq!(response.summary.coverage_counts.deleted_count, 1);
         assert_eq!(response.summary.coverage_counts.unsupported_count, 1);
     }

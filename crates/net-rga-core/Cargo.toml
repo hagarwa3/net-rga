@@ -11,6 +11,7 @@ path = "src/lib.rs"
 [dependencies]
 aws-config.workspace = true
 aws-sdk-s3.workspace = true
+flate2.workspace = true
 globset.workspace = true
 regex.workspace = true
 rusqlite.workspace = true
