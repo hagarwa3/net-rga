@@ -18,7 +18,7 @@ pub use domain::{
     Anchor, AnchorKind, AnchorLocator, CorpusDescriptor, CorpusId, CoverageCounts, CoverageStatus,
     DocumentId, DocumentLocator, DocumentMeta, ProviderKind, SearchMatch, SearchSummary,
 };
-pub use providers::LocalFsProvider;
+pub use providers::{LocalFsProvider, S3ConnectionConfig, S3Provider};
 pub use runtime::{ConfigStore, RuntimeError, RuntimePaths};
 pub use state::MANIFEST_SCHEMA_V1;
 pub use state::{ManifestDb, ManifestError, apply_manifest_migrations, open_manifest_db};
