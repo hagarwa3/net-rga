@@ -1,0 +1,290 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://net-rga.dev/schemas/benchmark_case.schema.json",
+  "title": "Net-RGA Benchmark Case",
+  "description": "Defines a single benchmark query case, its execution mode, and the reference to expected judgments.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "case_id",
+    "tier",
+    "corpus_id",
+    "title",
+    "query",
+    "run_mode",
+    "expected_results"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "1.0"
+    },
+    "case_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]{2,127}$"
+    },
+    "suite_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]{2,127}$"
+    },
+    "tier": {
+      "type": "string",
+      "enum": [
+        "tier0",
+        "tier1",
+        "tier2",
+        "tier3"
+      ]
+    },
+    "corpus_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._/-]{2,255}$"
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "description": {
+      "type": "string",
+      "maxLength": 2000
+    },
+    "tags": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z0-9][a-z0-9._-]{1,63}$"
+      },
+      "uniqueItems": true
+    },
+    "query": {
+      "$ref": "#/$defs/query"
+    },
+    "run_mode": {
+      "$ref": "#/$defs/run_mode"
+    },
+    "expected_results": {
+      "$ref": "#/$defs/expected_results"
+    },
+    "notes": {
+      "type": "string",
+      "maxLength": 2000
+    }
+  },
+  "$defs": {
+    "query": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "text",
+        "syntax",
+        "case_sensitivity"
+      ],
+      "properties": {
+        "text": {
+          "type": "string",
+          "minLength": 1
+        },
+        "syntax": {
+          "type": "string",
+          "enum": [
+            "literal",
+            "regex"
+          ]
+        },
+        "case_sensitivity": {
+          "type": "string",
+          "enum": [
+            "smart",
+            "sensitive",
+            "insensitive"
+          ]
+        },
+        "path_globs_include": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "path_globs_exclude": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "file_types": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$"
+          },
+          "uniqueItems": true
+        },
+        "metadata_filters": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/filter_predicate"
+          }
+        },
+        "max_results": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "stop_after_first_verified_match": {
+          "type": "boolean"
+        }
+      }
+    },
+    "filter_predicate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "field",
+        "op",
+        "value"
+      ],
+      "properties": {
+        "field": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9._-]{1,127}$"
+        },
+        "op": {
+          "type": "string",
+          "enum": [
+            "eq",
+            "neq",
+            "lt",
+            "lte",
+            "gt",
+            "gte",
+            "contains",
+            "in"
+          ]
+        },
+        "value": {
+          "$ref": "#/$defs/filter_value"
+        }
+      }
+    },
+    "filter_value": {
+      "oneOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "integer"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "minItems": 1
+        }
+      ]
+    },
+    "run_mode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provider_mode",
+        "manifest_state",
+        "content_cache_state",
+        "backend_mode"
+      ],
+      "properties": {
+        "provider_mode": {
+          "type": "string",
+          "enum": [
+            "local_fs",
+            "s3_compatible",
+            "s3",
+            "corpus_default"
+          ]
+        },
+        "manifest_state": {
+          "type": "string",
+          "enum": [
+            "cold",
+            "warm",
+            "stale",
+            "imported_bundle"
+          ]
+        },
+        "content_cache_state": {
+          "type": "string",
+          "enum": [
+            "cold",
+            "warm",
+            "not_applicable"
+          ]
+        },
+        "backend_mode": {
+          "type": "string",
+          "enum": [
+            "disabled",
+            "enabled",
+            "corpus_default"
+          ]
+        },
+        "mutation_set_id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9._-]{2,127}$"
+        },
+        "network_profile": {
+          "type": "string",
+          "enum": [
+            "default",
+            "throttled",
+            "not_applicable"
+          ]
+        }
+      }
+    },
+    "expected_results": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "judgment_file",
+        "judgment_case_id"
+      ],
+      "properties": {
+        "judgment_file": {
+          "type": "string",
+          "minLength": 1
+        },
+        "judgment_case_id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9._-]{2,127}$"
+        },
+        "requires_complete_coverage": {
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}
