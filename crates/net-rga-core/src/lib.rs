@@ -1,6 +1,7 @@
 pub mod config;
 pub mod contracts;
 pub mod domain;
+pub mod state;
 
 pub use config::{
     AppConfig, BackendBinding, CorpusConfig, ProviderConfig, StateLayout, DEFAULT_STATE_DIR_NAME,
@@ -15,3 +16,4 @@ pub use domain::{
     Anchor, AnchorKind, AnchorLocator, CorpusDescriptor, CorpusId, CoverageCounts, CoverageStatus,
     DocumentId, DocumentLocator, DocumentMeta, ProviderKind, SearchMatch, SearchSummary,
 };
+pub use state::MANIFEST_SCHEMA_V1;
