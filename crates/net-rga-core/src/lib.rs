@@ -1,13 +1,7 @@
-pub fn workspace_bootstrapped() -> bool {
-    true
-}
+pub mod domain;
 
-#[cfg(test)]
-mod tests {
-    use super::workspace_bootstrapped;
+pub use domain::{
+    Anchor, AnchorKind, AnchorLocator, CorpusDescriptor, CorpusId, CoverageCounts, CoverageStatus,
+    DocumentId, DocumentLocator, DocumentMeta, ProviderKind, SearchMatch, SearchSummary,
+};
 
-    #[test]
-    fn workspace_bootstrap_flag_is_true() {
-        assert!(workspace_bootstrapped());
-    }
-}
