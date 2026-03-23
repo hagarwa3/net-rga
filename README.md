@@ -220,3 +220,4 @@ Benchmark corpora and result artifacts are intentionally kept out of git.
 
 - [`PLAN.md`](PLAN.md): implementation plan and phase breakdown
 - [`BENCHMARK_PLAN.md`](BENCHMARK_PLAN.md): benchmark strategy and suite design
+- [`LIMITATIONS.md`](LIMITATIONS.md): current v0 limits and deferred features

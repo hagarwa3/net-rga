@@ -761,7 +761,7 @@ Checklist:
 - [x] Add CLI snapshot tests for text and JSON output
 - [x] Expand the benchmark scaffold into mixed-format, provider-matrix, and freshness benchmark runs
 - [x] Refresh `README.md` once implementation exists
-- [ ] Document known limitations and deferred features
+- [x] Document known limitations and deferred features
 
 ## Testing And Validation Strategy
 
