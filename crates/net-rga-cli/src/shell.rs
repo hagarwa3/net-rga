@@ -3,7 +3,8 @@ use std::path::PathBuf;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use net_rga_core::{
     ConfigStore, CorpusConfig, CorpusId, ProviderConfig, RuntimePaths, SearchOutputFormat,
-    SearchRequest, SearchResponse, execute_search, sync_corpus,
+    SearchRequest, SearchResponse, execute_search, export_corpus_bundle, import_corpus_bundle,
+    sync_corpus,
 };
 
 #[derive(Debug, Parser)]
@@ -129,8 +130,8 @@ pub fn run(cli: Cli) -> Result<CommandOutcome, String> {
         Commands::Sync(args) => handle_sync(args).map(ok_outcome),
         Commands::Search(args) => handle_search(args),
         Commands::Inspect(args) => Ok(ok_outcome(format!("placeholder: inspect {}", args.corpus))),
-        Commands::Export(args) => Ok(ok_outcome(format!("placeholder: export {} {}", args.corpus, args.bundle))),
-        Commands::Import(args) => Ok(ok_outcome(format!("placeholder: import {}", args.bundle))),
+        Commands::Export(args) => handle_export(args).map(ok_outcome),
+        Commands::Import(args) => handle_import(args).map(ok_outcome),
     }
 }
 
@@ -230,6 +231,32 @@ fn handle_search(args: SearchArgs) -> Result<CommandOutcome, String> {
     let request = build_search_request(&args);
     let paths = RuntimePaths::from_env().map_err(|error| error.to_string())?;
     handle_search_with_paths(&paths, &request)
+}
+
+fn handle_export(args: ExportArgs) -> Result<String, String> {
+    let paths = RuntimePaths::from_env().map_err(|error| error.to_string())?;
+    let manifest = export_corpus_bundle(&paths, &args.corpus, &PathBuf::from(&args.bundle))
+        .map_err(|error| error.to_string())?;
+    Ok(format!(
+        "exported {}\tbundle={}\tindex={}\tcache={}",
+        manifest.corpus.id,
+        args.bundle,
+        manifest.artifacts.index_dir.as_deref().unwrap_or("-"),
+        manifest.artifacts.cache_dir.as_deref().unwrap_or("-"),
+    ))
+}
+
+fn handle_import(args: ImportArgs) -> Result<String, String> {
+    let paths = RuntimePaths::from_env().map_err(|error| error.to_string())?;
+    let manifest =
+        import_corpus_bundle(&paths, &PathBuf::from(&args.bundle)).map_err(|error| error.to_string())?;
+    Ok(format!(
+        "imported {}\tbundle={}\tindex={}\tcache={}",
+        manifest.corpus.id,
+        args.bundle,
+        manifest.artifacts.index_dir.as_deref().unwrap_or("-"),
+        manifest.artifacts.cache_dir.as_deref().unwrap_or("-"),
+    ))
 }
 
 fn handle_search_with_paths(paths: &RuntimePaths, request: &SearchRequest) -> Result<CommandOutcome, String> {

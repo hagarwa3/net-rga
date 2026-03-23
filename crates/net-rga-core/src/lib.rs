@@ -14,7 +14,10 @@ pub mod sync;
 pub use config::{
     AppConfig, BackendBinding, CorpusConfig, ProviderConfig, StateLayout, DEFAULT_STATE_DIR_NAME,
 };
-pub use bundle::{BUNDLE_SCHEMA_VERSION, BundleError, BundleManifest, BundlePayload};
+pub use bundle::{
+    BUNDLE_SCHEMA_VERSION, BundleError, BundleManifest, BundlePayload, export_corpus_bundle,
+    import_corpus_bundle,
+};
 pub use contracts::{
     ByteRange, ContractError, DeltaCapability, DeltaEvent, DeltaPage, ExtractedChunk,
     ExtractedDocument,

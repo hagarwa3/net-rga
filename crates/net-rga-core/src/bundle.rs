@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::config::{CorpusConfig, StateLayout};
+use crate::domain::CorpusId;
+use crate::runtime::{ConfigStore, RuntimePaths};
 
 pub const BUNDLE_SCHEMA_VERSION: &str = "1";
 
@@ -83,6 +85,8 @@ pub enum BundleError {
     SerializeToml(#[from] toml::ser::Error),
     #[error("toml deserialization error: {0}")]
     DeserializeToml(#[from] toml::de::Error),
+    #[error("{0}")]
+    Runtime(#[from] crate::runtime::RuntimeError),
 }
 
 pub fn write_bundle(
@@ -130,6 +134,59 @@ pub fn bundle_artifact_path(bundle_root: &Path, relative_path: &str) -> PathBuf 
     bundle_root.join(relative_path)
 }
 
+pub fn export_corpus_bundle(
+    paths: &RuntimePaths,
+    corpus_id: &str,
+    bundle_root: &Path,
+) -> Result<BundleManifest, BundleError> {
+    let store = ConfigStore::new(paths.clone());
+    let corpus = store
+        .list_corpora()?
+        .into_iter()
+        .find(|candidate| candidate.id == corpus_id)
+        .ok_or_else(|| BundleError::InvalidManifest(format!("unknown corpus {corpus_id}")))?;
+    let layout = StateLayout::for_corpus(&paths.state_root, &CorpusId(corpus.id.clone()));
+    let include_index = directory_has_entries(&layout.index_dir)?;
+    let include_cache = directory_has_entries(&layout.cache_dir)?;
+    let payload = BundlePayload {
+        manifest: BundleManifest::for_corpus(&corpus, include_index, include_cache),
+        corpus_config: corpus,
+    };
+    write_bundle(bundle_root, &payload, &layout)?;
+    Ok(payload.manifest)
+}
+
+pub fn import_corpus_bundle(
+    paths: &RuntimePaths,
+    bundle_root: &Path,
+) -> Result<BundleManifest, BundleError> {
+    let payload = read_bundle(bundle_root)?;
+    let corpus_id = CorpusId(payload.corpus_config.id.clone());
+    let layout = StateLayout::for_corpus(&paths.state_root, &corpus_id);
+    fs::create_dir_all(&layout.corpus_root)?;
+    copy_file(
+        &bundle_artifact_path(bundle_root, &payload.manifest.artifacts.manifest_db),
+        &layout.manifest_db,
+    )?;
+
+    if let Some(index_dir) = payload.manifest.artifacts.index_dir.as_deref() {
+        if layout.index_dir.exists() {
+            fs::remove_dir_all(&layout.index_dir)?;
+        }
+        copy_dir_recursive(&bundle_artifact_path(bundle_root, index_dir), &layout.index_dir)?;
+    }
+    if let Some(cache_dir) = payload.manifest.artifacts.cache_dir.as_deref() {
+        if layout.cache_dir.exists() {
+            fs::remove_dir_all(&layout.cache_dir)?;
+        }
+        copy_dir_recursive(&bundle_artifact_path(bundle_root, cache_dir), &layout.cache_dir)?;
+    }
+
+    let store = ConfigStore::new(paths.clone());
+    store.upsert_corpus(payload.corpus_config)?;
+    Ok(payload.manifest)
+}
+
 fn copy_file(source: &Path, target: &Path) -> Result<(), BundleError> {
     let parent = target.parent().ok_or_else(|| {
         BundleError::InvalidManifest(format!("invalid target path: {}", target.display()))
@@ -153,6 +210,13 @@ fn copy_dir_recursive(source: &Path, target: &Path) -> Result<(), BundleError> {
         }
     }
     Ok(())
+}
+
+fn directory_has_entries(path: &Path) -> Result<bool, BundleError> {
+    if !path.exists() {
+        return Ok(false);
+    }
+    Ok(fs::read_dir(path)?.next().is_some())
 }
 
 #[cfg(test)]

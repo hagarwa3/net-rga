@@ -81,6 +81,16 @@ impl ConfigStore {
         self.save(&config)
     }
 
+    pub fn upsert_corpus(&self, corpus: CorpusConfig) -> Result<(), RuntimeError> {
+        let mut config = self.load()?;
+        if let Some(existing) = config.corpora.iter_mut().find(|existing| existing.id == corpus.id) {
+            *existing = corpus;
+        } else {
+            config.corpora.push(corpus);
+        }
+        self.save(&config)
+    }
+
     pub fn remove_corpus(&self, corpus_id: &str) -> Result<(), RuntimeError> {
         let mut config = self.load()?;
         let original_count = config.corpora.len();
