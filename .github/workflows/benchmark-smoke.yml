@@ -1,0 +1,18 @@
+name: benchmark-smoke
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  tier0-local-fs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Run Tier 0 benchmark scaffold
+        run: |
+          ./benchmarks/run_tier0.sh "$RUNNER_TEMP/tier0_local_fs.json"
+

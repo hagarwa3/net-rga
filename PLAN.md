@@ -504,7 +504,7 @@ Checklist:
 - [x] Create a tiny deterministic golden corpus for local filesystem runs
 - [x] Add 5-10 golden scenarios covering exact match, path filter, unsupported file, and partial coverage cases
 - [x] Build a minimal local harness that can compare revisions on the golden corpus
-- [ ] Wire the benchmark scaffold into fast local/CI execution
+- [x] Wire the benchmark scaffold into fast local/CI execution
 
 ### Phase 0: Scaffolding
 

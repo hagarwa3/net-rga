@@ -73,6 +73,9 @@ Current commands:
 python3 benchmarks/materialize_tier0_corpus.py
 python3 benchmarks/harness.py run
 python3 benchmarks/harness.py compare path/to/before.json path/to/after.json
+./benchmarks/run_tier0.sh
 ```
 
 The initial harness is only expected to support the Tier 0 local-filesystem golden corpus. It exists to give the project stable machine-readable baseline results before the main Rust implementation lands.
+
+The same scaffold is wired into a lightweight GitHub Actions workflow so the Tier 0 benchmark can run in fast CI before the main engine exists.
