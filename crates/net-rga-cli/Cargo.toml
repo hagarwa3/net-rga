@@ -1,0 +1,12 @@
+[package]
+name = "net-rga-cli"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "net-rga"
+path = "src/main.rs"
+
+[dependencies]
+net-rga-core = { path = "../net-rga-core" }
+

@@ -1,0 +1,7 @@
+[workspace]
+members = [
+  "crates/net-rga-cli",
+  "crates/net-rga-core",
+]
+resolver = "2"
+
