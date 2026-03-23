@@ -579,7 +579,7 @@ Checklist:
 - [x] Implement corpus add/list/remove commands
 - [x] Implement local filesystem provider
 - [x] Implement S3 connector config and auth resolution
-- [ ] Implement S3 list/stat/read/resolve primitives
+- [x] Implement S3 list/stat/read/resolve primitives
 - [ ] Add provider integration tests for local filesystem and an S3-compatible target
 
 ### Phase 2: Sync engine and manifest reconciliation
