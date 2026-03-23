@@ -296,6 +296,26 @@ mod tests {
     }
 
     #[test]
+    fn bundle_manifest_requires_core_artifact_paths() {
+        let invalid = BundleManifest {
+            schema_version: BUNDLE_SCHEMA_VERSION.to_owned(),
+            corpus: super::BundleCorpus {
+                id: "local".to_owned(),
+                display_name: None,
+                provider_kind: "local_fs".to_owned(),
+            },
+            artifacts: super::BundleArtifacts {
+                corpus_config: String::new(),
+                manifest_db: String::new(),
+                index_dir: None,
+                cache_dir: None,
+            },
+        };
+
+        assert!(invalid.validate().is_err());
+    }
+
+    #[test]
     fn bundle_write_and_read_round_trip_manifest_and_config() {
         let root = temp_root();
         let bundle_root = root.join("bundle");

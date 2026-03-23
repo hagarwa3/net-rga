@@ -731,4 +731,86 @@ mod tests {
         assert!(response.matches.is_empty());
         assert_eq!(response.summary.indexed_candidates, 1);
     }
+
+    #[test]
+    fn coverage_accounting_distinguishes_denied_and_failed_reads() {
+        struct CoverageProvider;
+
+        impl Provider for CoverageProvider {
+            fn list(&self, _prefix: &str, _cursor: Option<&str>) -> Result<crate::contracts::ListPage, ContractError> {
+                Err(ContractError::Unsupported("list not used".to_owned()))
+            }
+
+            fn stat(&self, _document_id: &DocumentId) -> Result<crate::domain::DocumentMeta, ContractError> {
+                Err(ContractError::Unsupported("stat not used".to_owned()))
+            }
+
+            fn read(&self, document_id: &DocumentId, _range: Option<ByteRange>) -> Result<ReadPayload, ContractError> {
+                match document_id.0.as_str() {
+                    "docs/denied.txt" => Err(ContractError::PermissionDenied("denied".to_owned())),
+                    "docs/failure.txt" => Err(ContractError::Transient("throttled".to_owned())),
+                    _ => Ok(ReadPayload {
+                        bytes: b"riverglass appears here".to_vec(),
+                    }),
+                }
+            }
+
+            fn resolve(&self, _locator: &DocumentLocator) -> Result<ResolvedDocument, ContractError> {
+                Err(ContractError::Unsupported("resolve not used".to_owned()))
+            }
+        }
+
+        let response = execute_search_with_provider(
+            &SearchRequest {
+                extensions: Vec::new(),
+                content_types: Vec::new(),
+                size_min: None,
+                size_max: None,
+                modified_after: None,
+                modified_before: None,
+                limit: None,
+                ..request()
+            },
+            &CorpusConfig {
+                id: "local".to_owned(),
+                display_name: Some("Local".to_owned()),
+                provider: ProviderConfig::LocalFs {
+                    root: std::path::PathBuf::from("/tmp/docs"),
+                },
+                include_globs: Vec::new(),
+                exclude_globs: Vec::new(),
+                backend: None,
+            },
+            &CoverageProvider,
+            vec![
+                crate::domain::DocumentMeta {
+                    id: DocumentId("docs/denied.txt".to_owned()),
+                    locator: DocumentLocator {
+                        path: "docs/denied.txt".to_owned(),
+                    },
+                    extension: Some("txt".to_owned()),
+                    content_type: Some("text/plain".to_owned()),
+                    version: Some("v1".to_owned()),
+                    size_bytes: 42,
+                    modified_at: Some("200".to_owned()),
+                },
+                crate::domain::DocumentMeta {
+                    id: DocumentId("docs/failure.txt".to_owned()),
+                    locator: DocumentLocator {
+                        path: "docs/failure.txt".to_owned(),
+                    },
+                    extension: Some("txt".to_owned()),
+                    content_type: Some("text/plain".to_owned()),
+                    version: Some("v1".to_owned()),
+                    size_bytes: 42,
+                    modified_at: Some("200".to_owned()),
+                },
+            ],
+        )
+        .unwrap_or_else(|error| panic!("search should execute: {error}"));
+
+        assert_eq!(response.summary.coverage_counts.denied_count, 1);
+        assert_eq!(response.summary.coverage_counts.failure_count, 1);
+        assert!(matches!(response.summary.coverage_status, crate::domain::CoverageStatus::Partial));
+    }
 }

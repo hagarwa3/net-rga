@@ -359,6 +359,7 @@ mod tests {
     use std::env;
     use std::fs;
     use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use net_rga_core::{ConfigStore, CorpusConfig, ProviderConfig, RuntimePaths, SearchOutputFormat};
@@ -368,12 +369,17 @@ mod tests {
         handle_sync_with_paths,
     };
 
+    static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
     fn temp_state_root() -> PathBuf {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or_default();
-        env::temp_dir().join("net-rga-cli-tests").join(format!("state-{nanos}"))
+        let counter = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+        env::temp_dir()
+            .join("net-rga-cli-tests")
+            .join(format!("state-{}-{nanos}-{counter}", std::process::id()))
     }
 
     #[test]
