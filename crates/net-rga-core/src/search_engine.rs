@@ -24,6 +24,16 @@ pub fn filter_manifest_documents(
     filter_documents(documents, request)
 }
 
+pub fn rank_documents(mut documents: Vec<DocumentMeta>, request: &SearchRequest) -> Vec<DocumentMeta> {
+    let query_lower = request.query.to_ascii_lowercase();
+    documents.sort_by(|left, right| {
+        let left_score = ranking_key(left, &query_lower);
+        let right_score = ranking_key(right, &query_lower);
+        left_score.cmp(&right_score)
+    });
+    documents
+}
+
 pub fn filter_documents(
     documents: Vec<DocumentMeta>,
     request: &SearchRequest,
@@ -38,6 +48,21 @@ pub fn filter_documents(
         .filter(|document| matches_modified_time(request, document))
         .collect();
     Ok(filtered)
+}
+
+fn ranking_key(document: &DocumentMeta, query_lower: &str) -> (u8, u8, u64, std::cmp::Reverse<u64>, String) {
+    let path_lower = document.locator.path.to_ascii_lowercase();
+    let path_matches_query = if path_lower.contains(query_lower) { 0 } else { 1 };
+    let supported_text_rank = if is_text_likely(document) { 0 } else { 1 };
+    let size_rank = document.size_bytes;
+    let modified_rank = std::cmp::Reverse(parse_modified_at(document.modified_at.as_deref()));
+    (
+        path_matches_query,
+        supported_text_rank,
+        size_rank,
+        modified_rank,
+        document.locator.path.clone(),
+    )
 }
 
 fn build_glob_matcher(path_globs: &[String]) -> Result<Option<GlobSet>, SearchEngineError> {
@@ -101,7 +126,7 @@ fn matches_modified_time(request: &SearchRequest, document: &DocumentMeta) -> bo
     let Some(modified_at) = document.modified_at.as_deref() else {
         return request.modified_after.is_none() && request.modified_before.is_none();
     };
-    let modified_value = modified_at.parse::<u64>().ok();
+    let modified_value = Some(parse_modified_at(Some(modified_at)));
     let after_ok = match (request.modified_after.as_deref(), modified_value) {
         (Some(value), Some(modified)) => value.parse::<u64>().map(|after| modified >= after).unwrap_or(false),
         (Some(_), None) => false,
@@ -115,11 +140,30 @@ fn matches_modified_time(request: &SearchRequest, document: &DocumentMeta) -> bo
     after_ok && before_ok
 }
 
+fn is_text_likely(document: &DocumentMeta) -> bool {
+    if let Some(content_type) = document.content_type.as_deref()
+        && content_type.starts_with("text/")
+    {
+        return true;
+    }
+
+    matches!(
+        document.extension.as_deref(),
+        Some("csv" | "json" | "log" | "md" | "txt")
+    )
+}
+
+fn parse_modified_at(modified_at: Option<&str>) -> u64 {
+    modified_at
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use crate::domain::{CorpusId, DocumentId, DocumentLocator, SearchOutputFormat, SearchRequest};
 
-    use super::filter_documents;
+    use super::{filter_documents, rank_documents};
 
     fn request() -> SearchRequest {
         SearchRequest {
@@ -171,5 +215,51 @@ mod tests {
 
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].locator.path, "docs/report.txt");
+    }
+
+    #[test]
+    fn rank_documents_prefers_path_hits_text_and_smaller_files() {
+        let request = request();
+        let ranked = rank_documents(
+            vec![
+                crate::domain::DocumentMeta {
+                    id: DocumentId("docs/large.txt".to_owned()),
+                    locator: DocumentLocator {
+                        path: "docs/large.txt".to_owned(),
+                    },
+                    extension: Some("txt".to_owned()),
+                    content_type: Some("text/plain".to_owned()),
+                    version: Some("v1".to_owned()),
+                    size_bytes: 500,
+                    modified_at: Some("100".to_owned()),
+                },
+                crate::domain::DocumentMeta {
+                    id: DocumentId("docs/riverglass.txt".to_owned()),
+                    locator: DocumentLocator {
+                        path: "docs/riverglass.txt".to_owned(),
+                    },
+                    extension: Some("txt".to_owned()),
+                    content_type: Some("text/plain".to_owned()),
+                    version: Some("v1".to_owned()),
+                    size_bytes: 50,
+                    modified_at: Some("200".to_owned()),
+                },
+                crate::domain::DocumentMeta {
+                    id: DocumentId("media/riverglass.mp4".to_owned()),
+                    locator: DocumentLocator {
+                        path: "media/riverglass.mp4".to_owned(),
+                    },
+                    extension: Some("mp4".to_owned()),
+                    content_type: Some("video/mp4".to_owned()),
+                    version: Some("v1".to_owned()),
+                    size_bytes: 10,
+                    modified_at: Some("300".to_owned()),
+                },
+            ],
+            &request,
+        );
+
+        assert_eq!(ranked[0].locator.path, "docs/riverglass.txt");
+        assert_eq!(ranked[1].locator.path, "media/riverglass.mp4");
     }
 }
