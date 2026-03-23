@@ -1,0 +1,262 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://net-rga.dev/schemas/judgment.schema.json",
+  "title": "Net-RGA Benchmark Judgment Set",
+  "description": "Defines judged expectations for one or more benchmark cases, including relevant documents, acceptable anchors, snippet expectations, and coverage requirements.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "judgment_set_id",
+    "corpus_id",
+    "cases"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "1.0"
+    },
+    "judgment_set_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]{2,127}$"
+    },
+    "corpus_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._/-]{2,255}$"
+    },
+    "cases": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/judged_case"
+      }
+    }
+  },
+  "$defs": {
+    "judged_case": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "case_id",
+        "coverage_expectation",
+        "relevant_results"
+      ],
+      "properties": {
+        "case_id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9._-]{2,127}$"
+        },
+        "coverage_expectation": {
+          "$ref": "#/$defs/coverage_expectation"
+        },
+        "minimum_expected_matches": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "relevant_results": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/relevant_result"
+          }
+        },
+        "disallowed_documents": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "notes": {
+          "type": "string",
+          "maxLength": 2000
+        }
+      }
+    },
+    "coverage_expectation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "complete_required",
+            "partial_allowed",
+            "partial_required"
+          ]
+        },
+        "allowed_partial_reasons": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "deleted",
+              "denied",
+              "stale",
+              "unsupported",
+              "transient_failure",
+              "user_limit"
+            ]
+          },
+          "uniqueItems": true
+        }
+      }
+    },
+    "relevant_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "document_id",
+        "relevance_grade"
+      ],
+      "properties": {
+        "document_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "relevance_grade": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3
+        },
+        "acceptable_anchors": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/anchor_reference"
+          }
+        },
+        "preferred_anchor": {
+          "$ref": "#/$defs/anchor_reference"
+        },
+        "snippet_expectations": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/snippet_expectation"
+          }
+        }
+      }
+    },
+    "anchor_reference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "anchor_kind",
+        "locator"
+      ],
+      "properties": {
+        "anchor_kind": {
+          "type": "string",
+          "enum": [
+            "line_span",
+            "page_span",
+            "slide_region",
+            "sheet_range",
+            "chunk_span",
+            "byte_span",
+            "text_span"
+          ]
+        },
+        "locator": {
+          "$ref": "#/$defs/locator"
+        },
+        "tolerance": {
+          "type": "string",
+          "enum": [
+            "exact",
+            "same_container",
+            "nearby"
+          ]
+        }
+      }
+    },
+    "locator": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "page": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "slide": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "sheet": {
+          "type": "string",
+          "minLength": 1
+        },
+        "cell_range": {
+          "type": "string",
+          "minLength": 1
+        },
+        "chunk_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "line_start": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "line_end": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "byte_start": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "byte_end": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "text_start": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "text_end": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "snippet_expectation": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "must_include_terms": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "preferred_phrase": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "anyOf": [
+        {
+          "required": [
+            "must_include_terms"
+          ]
+        },
+        {
+          "required": [
+            "preferred_phrase"
+          ]
+        }
+      ]
+    }
+  }
+}

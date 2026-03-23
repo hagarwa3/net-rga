@@ -22,6 +22,7 @@ benchmarks/
   README.md
   schemas/
     benchmark_case.schema.json
+    judgment.schema.json
 ```
 
 ## Case schema design rules
@@ -33,6 +34,4 @@ benchmarks/
 
 ## Planned next schemas
 
-- `judgment.schema.json`
 - `benchmark_result.schema.json`
-
