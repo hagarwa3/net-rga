@@ -49,6 +49,7 @@ Generated corpus data and benchmark result artifacts do not stay in git:
 
 - `benchmarks/data/`
 - `benchmarks/results/`
+- `benchmarks/cache/`
 
 This keeps the repo small while still preserving reproducibility.
 
@@ -56,7 +57,16 @@ Long term, the intended model is:
 
 - tiny deterministic corpora can be materialized locally from tracked generators
 - larger corpora should be versioned by manifest and stored outside git
+- every tracked corpus definition should include provenance, license notes, and expected checksums
 - benchmark runs should record the corpus version or manifest id they used
+
+The practical rule is simple:
+
+- git stores benchmark definitions
+- ignored local directories store benchmark blobs
+- every benchmark result names the corpus build it used
+
+For larger shared corpora, the repository should eventually track only the manifest and retrieval instructions, while the actual data lives in an external artifact store.
 
 ## Planned next schemas
 

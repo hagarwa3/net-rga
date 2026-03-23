@@ -237,13 +237,42 @@ Benchmark search corpora and result artifacts should not live in git by default:
 
 - generated corpora go under an ignored local data directory
 - benchmark result files go under an ignored local results directory
+- downloaded or transformed source corpora go under an ignored local cache directory
 
 Long-term management model:
 
 - tiny deterministic corpora are generated locally from tracked scripts or manifests
 - medium and large corpora are versioned by manifest id and stored outside git
+- every tracked corpus definition should record provenance, license constraints, generator version, and expected checksums
 - every benchmark report records the corpus version or manifest identifier it used
 - if shared benchmark data becomes necessary, use an external artifact store rather than bloating the source repo
+
+### Benchmark data lifecycle
+
+The benchmark suite should treat benchmark data like build artifacts, not source code.
+
+Required long-term workflow:
+
+1. Track only benchmark definitions in git.
+   This includes schemas, cases, judgments, mutation specs, generator scripts, and corpus manifests.
+2. Materialize corpora into ignored local directories.
+   Generated corpora belong under `benchmarks/data/`. Downloaded or transformed source corpora belong under `benchmarks/cache/`.
+3. Identify every corpus build with a stable corpus or manifest id.
+   A manifest id should be enough to recover the exact generator inputs, public source references, and expected file checksums.
+4. Emit corpus identity in every benchmark result.
+   A result file is incomplete if it does not say which corpus build, provider mode, cache mode, and git revision produced it.
+5. Share larger corpora through an external artifact store when needed.
+   The repository should keep the manifest, provenance, and checksums, but not the raw benchmark blobs.
+
+### Benchmark data guardrails
+
+- Do not commit raw benchmark corpora or benchmark result files.
+- Prefer synthetic data and transformed public datasets over proprietary document collections.
+- Keep provenance and license notes with each tracked corpus manifest or generator definition.
+- Avoid opaque one-off datasets that cannot be recreated or checksum-verified.
+- Preserve deterministic seeds for synthetic corpus generation whenever practical.
+- Make it possible to rebuild tiny CI corpora locally without network access.
+- Assume medium and large corpora may need retention, pruning, and mirroring policies outside the source repo.
 
 ## Query Taxonomy
 
