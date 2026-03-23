@@ -299,7 +299,10 @@ where
             .map(ToOwned::to_owned)
             .unwrap_or_else(|| service_error.to_string());
         return match service_error.code() {
-            Some("AccessDenied") | Some("Forbidden") => ContractError::PermissionDenied(message),
+            Some("AccessDenied") | Some("Forbidden") | Some("InvalidAccessKeyId")
+            | Some("SignatureDoesNotMatch") | Some("ExpiredToken") => {
+                ContractError::PermissionDenied(message)
+            }
             Some("SlowDown") | Some("Throttling") | Some("ThrottlingException")
             | Some("TooManyRequestsException") | Some("RequestTimeout") => ContractError::Throttled(message),
             Some("NoSuchBucket") | Some("NoSuchKey") | Some("NotFound") | Some("404") => ContractError::NotFound(message),

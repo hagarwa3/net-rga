@@ -74,7 +74,8 @@ pub fn sync_corpus_config(paths: &RuntimePaths, corpus: &CorpusConfig) -> Result
     sync_corpus_with_provider(paths, corpus, provider.as_ref())
 }
 
-fn sync_corpus_with_provider(
+#[doc(hidden)]
+pub fn sync_corpus_with_provider(
     paths: &RuntimePaths,
     corpus: &CorpusConfig,
     provider: &dyn Provider,

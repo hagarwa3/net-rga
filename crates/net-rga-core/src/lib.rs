@@ -23,4 +23,4 @@ pub use providers::{LocalFsProvider, S3ConnectionConfig, S3Provider};
 pub use runtime::{ConfigStore, RuntimeError, RuntimePaths};
 pub use state::MANIFEST_SCHEMA_V1;
 pub use state::{ManifestDb, ManifestError, apply_manifest_migrations, open_manifest_db};
-pub use sync::{SyncCheckpointName, SyncError, SyncRunSummary, sync_corpus};
+pub use sync::{SyncCheckpointName, SyncError, SyncRunSummary, sync_corpus, sync_corpus_with_provider};
