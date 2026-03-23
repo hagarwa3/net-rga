@@ -538,7 +538,7 @@ Open risks:
 Checklist:
 
 - [x] Initialize Cargo workspace
-- [ ] Add base crates and lint/test scaffolding
+- [x] Add base crates and lint/test scaffolding
 - [ ] Define domain models for corpus, document identity, metadata, anchors, and search summary
 - [ ] Define provider, optional capability, search backend, and extractor traits
 - [ ] Define config schema and local state directory conventions
