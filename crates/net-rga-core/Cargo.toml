@@ -12,6 +12,7 @@ path = "src/lib.rs"
 aws-config.workspace = true
 aws-sdk-s3.workspace = true
 globset.workspace = true
+regex.workspace = true
 rusqlite.workspace = true
 serde.workspace = true
 thiserror.workspace = true

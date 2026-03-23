@@ -1,16 +1,29 @@
 use globset::{Glob, GlobSet, GlobSetBuilder};
+use regex::Regex;
 use thiserror::Error;
 
-use crate::domain::{DocumentMeta, SearchRequest};
-use crate::runtime::RuntimePaths;
+use crate::config::CorpusConfig;
+use crate::contracts::{ContractError, Provider};
+use crate::domain::{
+    Anchor, AnchorKind, AnchorLocator, CoverageCounts, CoverageStatus, DocumentMeta, SearchMatch,
+    SearchRequest, SearchResponse, SearchSummary,
+};
+use crate::providers::provider_from_config;
+use crate::runtime::{ConfigStore, RuntimePaths};
 use crate::state::{ManifestDb, ManifestError};
 
 #[derive(Debug, Error)]
 pub enum SearchEngineError {
     #[error("{0}")]
     Manifest(#[from] ManifestError),
+    #[error("{0}")]
+    Runtime(#[from] crate::runtime::RuntimeError),
+    #[error("{0}")]
+    Contract(#[from] ContractError),
     #[error("invalid glob pattern: {0}")]
     InvalidGlob(String),
+    #[error("invalid search pattern: {0}")]
+    InvalidPattern(String),
 }
 
 pub fn filter_manifest_documents(
@@ -48,6 +61,113 @@ pub fn filter_documents(
         .filter(|document| matches_modified_time(request, document))
         .collect();
     Ok(filtered)
+}
+
+pub fn execute_search(
+    paths: &RuntimePaths,
+    request: &SearchRequest,
+) -> Result<SearchResponse, SearchEngineError> {
+    let store = ConfigStore::new(paths.clone());
+    let corpus = store
+        .list_corpora()?
+        .into_iter()
+        .find(|candidate| candidate.id == request.corpus_id.0)
+        .ok_or_else(|| SearchEngineError::InvalidPattern(format!("unknown corpus {}", request.corpus_id.0)))?;
+    let provider = provider_from_config(&corpus.provider)?;
+    let candidates = rank_documents(filter_manifest_documents(paths, request)?, request);
+    execute_search_with_provider(request, &corpus, provider.as_ref(), candidates)
+}
+
+pub fn execute_search_with_provider(
+    request: &SearchRequest,
+    _corpus: &CorpusConfig,
+    provider: &dyn Provider,
+    candidates: Vec<DocumentMeta>,
+) -> Result<SearchResponse, SearchEngineError> {
+    let matcher = SearchMatcher::new(request)?;
+    let mut matches = Vec::new();
+    let mut fetched_candidates = 0_u64;
+    let mut coverage_counts = CoverageCounts::default();
+    let total_candidates = u64::try_from(candidates.len()).unwrap_or_default();
+
+    for document in candidates {
+        if !is_text_likely(&document) {
+            coverage_counts.unsupported_count += 1;
+            continue;
+        }
+
+        fetched_candidates += 1;
+        let payload = match provider.read(&document.id, None) {
+            Ok(payload) => payload,
+            Err(ContractError::NotFound(_)) => {
+                coverage_counts.deleted_count += 1;
+                continue;
+            }
+            Err(ContractError::PermissionDenied(_)) => {
+                coverage_counts.denied_count += 1;
+                continue;
+            }
+            Err(_) => {
+                coverage_counts.failure_count += 1;
+                continue;
+            }
+        };
+
+        let content = String::from_utf8_lossy(&payload.bytes);
+        for (line_index, line) in content.lines().enumerate() {
+            if !matcher.is_match(line) {
+                continue;
+            }
+
+            matches.push(SearchMatch {
+                document_id: document.id.clone(),
+                anchor: Anchor {
+                    kind: AnchorKind::LineSpan,
+                    locator: AnchorLocator {
+                        path: Some(document.locator.path.clone()),
+                        line_start: Some(u32::try_from(line_index + 1).unwrap_or(u32::MAX)),
+                        line_end: Some(u32::try_from(line_index + 1).unwrap_or(u32::MAX)),
+                        ..AnchorLocator::default()
+                    },
+                },
+                snippet: line.to_owned(),
+                verified: true,
+            });
+
+            if let Some(limit) = request.limit
+                && matches.len() >= usize::try_from(limit).unwrap_or(usize::MAX)
+            {
+                break;
+            }
+        }
+
+        if let Some(limit) = request.limit
+            && matches.len() >= usize::try_from(limit).unwrap_or(usize::MAX)
+        {
+            break;
+        }
+    }
+
+    let coverage_status = if coverage_counts == CoverageCounts::default() {
+        CoverageStatus::Complete
+    } else {
+        CoverageStatus::Partial
+    };
+
+    Ok(SearchResponse {
+        request: request.clone(),
+        matches: matches.clone(),
+        summary: SearchSummary {
+            corpus_id: request.corpus_id.clone(),
+            query: request.query.clone(),
+            total_candidates,
+            indexed_candidates: 0,
+            fetched_candidates,
+            verified_matches: u64::try_from(matches.len()).unwrap_or_default(),
+            coverage_status,
+            coverage_counts,
+        },
+    })
 }
 
 fn ranking_key(document: &DocumentMeta, query_lower: &str) -> (u8, u8, u64, std::cmp::Reverse<u64>, String) {
@@ -159,11 +279,44 @@ fn parse_modified_at(modified_at: Option<&str>) -> u64 {
         .unwrap_or_default()
 }
 
+struct SearchMatcher {
+    regex: Option<Regex>,
+    query: String,
+    fixed_strings: bool,
+}
+
+impl SearchMatcher {
+    fn new(request: &SearchRequest) -> Result<Self, SearchEngineError> {
+        let regex = if request.fixed_strings {
+            None
+        } else {
+            Some(Regex::new(&request.query).map_err(|error| SearchEngineError::InvalidPattern(error.to_string()))?)
+        };
+        Ok(Self {
+            regex,
+            query: request.query.clone(),
+            fixed_strings: request.fixed_strings,
+        })
+    }
+
+    fn is_match(&self, line: &str) -> bool {
+        if self.fixed_strings {
+            line.contains(&self.query)
+        } else {
+            self.regex.as_ref().is_some_and(|regex| regex.is_match(line))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use crate::domain::{CorpusId, DocumentId, DocumentLocator, SearchOutputFormat, SearchRequest};
+    use crate::config::{CorpusConfig, ProviderConfig};
+    use crate::contracts::{ByteRange, ContractError, Provider, ReadPayload, ResolvedDocument};
+    use crate::domain::{
+        CorpusId, DocumentId, DocumentLocator, SearchOutputFormat, SearchRequest,
+    };
 
-    use super::{filter_documents, rank_documents};
+    use super::{execute_search_with_provider, filter_documents, rank_documents};
 
     fn request() -> SearchRequest {
         SearchRequest {
@@ -261,5 +414,93 @@ mod tests {
 
         assert_eq!(ranked[0].locator.path, "docs/riverglass.txt");
         assert_eq!(ranked[1].locator.path, "media/riverglass.mp4");
+    }
+
+    struct TestProvider;
+
+    impl Provider for TestProvider {
+        fn list(&self, _prefix: &str, _cursor: Option<&str>) -> Result<crate::contracts::ListPage, ContractError> {
+            Err(ContractError::Unsupported("list not used".to_owned()))
+        }
+
+        fn stat(&self, _document_id: &DocumentId) -> Result<crate::domain::DocumentMeta, ContractError> {
+            Err(ContractError::Unsupported("stat not used".to_owned()))
+        }
+
+        fn read(&self, document_id: &DocumentId, _range: Option<ByteRange>) -> Result<ReadPayload, ContractError> {
+            match document_id.0.as_str() {
+                "docs/report.txt" => Ok(ReadPayload {
+                    bytes: b"riverglass appears here\nanother line".to_vec(),
+                }),
+                "docs/missing.txt" => Err(ContractError::NotFound("gone".to_owned())),
+                "media/video.mp4" => Ok(ReadPayload { bytes: Vec::new() }),
+                _ => Err(ContractError::Unsupported("unknown document".to_owned())),
+            }
+        }
+
+        fn resolve(&self, _locator: &DocumentLocator) -> Result<ResolvedDocument, ContractError> {
+            Err(ContractError::Unsupported("resolve not used".to_owned()))
+        }
+    }
+
+    #[test]
+    fn execute_search_fetches_text_candidates_and_verifies_matches() {
+        let request = request();
+        let response = execute_search_with_provider(
+            &request,
+            &CorpusConfig {
+                id: "local".to_owned(),
+                display_name: Some("Local".to_owned()),
+                provider: ProviderConfig::LocalFs {
+                    root: std::path::PathBuf::from("/tmp/docs"),
+                },
+                include_globs: Vec::new(),
+                exclude_globs: Vec::new(),
+                backend: None,
+            },
+            &TestProvider,
+            vec![
+                crate::domain::DocumentMeta {
+                    id: DocumentId("docs/report.txt".to_owned()),
+                    locator: DocumentLocator {
+                        path: "docs/report.txt".to_owned(),
+                    },
+                    extension: Some("txt".to_owned()),
+                    content_type: Some("text/plain".to_owned()),
+                    version: Some("v1".to_owned()),
+                    size_bytes: 42,
+                    modified_at: Some("200".to_owned()),
+                },
+                crate::domain::DocumentMeta {
+                    id: DocumentId("docs/missing.txt".to_owned()),
+                    locator: DocumentLocator {
+                        path: "docs/missing.txt".to_owned(),
+                    },
+                    extension: Some("txt".to_owned()),
+                    content_type: Some("text/plain".to_owned()),
+                    version: Some("v1".to_owned()),
+                    size_bytes: 42,
+                    modified_at: Some("200".to_owned()),
+                },
+                crate::domain::DocumentMeta {
+                    id: DocumentId("media/video.mp4".to_owned()),
+                    locator: DocumentLocator {
+                        path: "media/video.mp4".to_owned(),
+                    },
+                    extension: Some("mp4".to_owned()),
+                    content_type: Some("video/mp4".to_owned()),
+                    version: Some("v1".to_owned()),
+                    size_bytes: 42,
+                    modified_at: Some("200".to_owned()),
+                },
+            ],
+        )
+        .unwrap_or_else(|error| panic!("search should execute: {error}"));
+
+        assert_eq!(response.matches.len(), 1);
+        assert_eq!(response.matches[0].document_id.0, "docs/report.txt");
+        assert_eq!(response.summary.fetched_candidates, 2);
+        assert_eq!(response.summary.coverage_counts.deleted_count, 1);
+        assert_eq!(response.summary.coverage_counts.unsupported_count, 1);
     }
 }

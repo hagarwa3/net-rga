@@ -4,7 +4,7 @@ use thiserror::Error;
 
 use crate::config::{CorpusConfig, ProviderConfig, StateLayout};
 use crate::contracts::{ContractError, Provider};
-use crate::providers::{LocalFsProvider, S3ConnectionConfig, S3Provider};
+use crate::providers::provider_from_config;
 use crate::runtime::{ConfigStore, RuntimeError, RuntimePaths};
 use crate::state::{DocumentUpsertStatus, ManifestDb, ManifestError};
 
@@ -70,7 +70,7 @@ pub fn sync_corpus(paths: &RuntimePaths, corpus_id: &str) -> Result<SyncRunSumma
 }
 
 pub fn sync_corpus_config(paths: &RuntimePaths, corpus: &CorpusConfig) -> Result<SyncRunSummary, SyncError> {
-    let provider = provider_for_config(&corpus.provider)?;
+    let provider = provider_from_config(&corpus.provider)?;
     sync_corpus_with_provider(paths, corpus, provider.as_ref())
 }
 
@@ -166,16 +166,6 @@ pub fn sync_corpus_with_provider(
         failed_objects,
         last_cursor: None,
     })
-}
-
-fn provider_for_config(config: &ProviderConfig) -> Result<Box<dyn Provider>, ContractError> {
-    match config {
-        ProviderConfig::LocalFs { root } => Ok(Box::new(LocalFsProvider::new(root.clone()))),
-        ProviderConfig::S3 { .. } => {
-            let connection = S3ConnectionConfig::from_provider_config(config)?;
-            Ok(Box::new(S3Provider::new(connection)?))
-        }
-    }
 }
 
 fn contract_error_kind(error: &ContractError) -> &'static str {
