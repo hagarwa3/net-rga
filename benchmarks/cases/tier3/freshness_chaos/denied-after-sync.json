@@ -1,0 +1,35 @@
+{
+  "schema_version": "1.0",
+  "case_id": "denied-after-sync",
+  "suite_id": "tier3-freshness-chaos",
+  "tier": "tier3",
+  "corpus_id": "tier3.s3_compatible.freshness_chaos",
+  "title": "Permission loss after manifest warm-up",
+  "description": "Validate that provider permission drift produces partial coverage with a denied reason instead of silently hiding results.",
+  "tags": [
+    "freshness",
+    "denied",
+    "partial_coverage"
+  ],
+  "query": {
+    "text": "invoice-7781",
+    "syntax": "literal",
+    "case_sensitivity": "smart",
+    "path_globs_include": [
+      "docs/finance/**"
+    ],
+    "max_results": 5
+  },
+  "run_mode": {
+    "provider_mode": "s3_compatible",
+    "manifest_state": "stale",
+    "content_cache_state": "cold",
+    "backend_mode": "enabled",
+    "mutation_set_id": "freshness-chaos-core"
+  },
+  "expected_results": {
+    "judgment_file": "benchmarks/judgments/tier3/freshness_chaos.json",
+    "judgment_case_id": "denied-after-sync",
+    "requires_complete_coverage": false
+  }
+}

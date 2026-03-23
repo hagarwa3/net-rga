@@ -20,7 +20,18 @@ This separation keeps benchmark inputs reusable. The same query case should be a
 ```text
 benchmarks/
   harness.py
+  cases/
+    tier0/
+    tier1/
+    tier3/
+  judgments/
+    tier0/
+    tier1/
+    tier3/
   materialize_tier0_corpus.py
+  mutations/
+    tier0/
+    tier3/
   README.md
   schemas/
     benchmark_case.schema.json
@@ -68,10 +79,23 @@ The practical rule is simple:
 
 For larger shared corpora, the repository should eventually track only the manifest and retrieval instructions, while the actual data lives in an external artifact store.
 
-## Planned next schemas
+## Tracked suites
 
-- tiny golden corpus inputs
-- first benchmark cases and judgments
+The scaffold now tracks four benchmark suite families:
+
+- `tier0`: tiny deterministic local-fs golden cases used in fast CI
+- `tier1/mixed_small`: mixed-format extraction and anchor-fidelity cases for PDFs and Office docs
+- `tier1/provider_matrix`: the same logical workload expressed across local-fs and S3-compatible provider modes
+- `tier3/freshness_chaos`: stale, deleted, and denied-object scenarios with explicit mutation-set references
+
+These tracked definitions are intentionally just:
+
+- cases
+- judgments
+- mutation specs
+- materializer scripts or future corpus manifests
+
+They do not commit the benchmark corpora themselves.
 
 ## Minimal harness
 
@@ -89,3 +113,12 @@ python3 benchmarks/harness.py compare path/to/before.json path/to/after.json
 The initial harness is only expected to support the Tier 0 local-filesystem golden corpus. It exists to give the project stable machine-readable baseline results before the main Rust implementation lands.
 
 The same scaffold is wired into a lightweight GitHub Actions workflow so the Tier 0 benchmark can run in fast CI before the main engine exists.
+
+## Next implementation step
+
+The next benchmark implementation pass should add:
+
+- a mixed-format corpus materializer for `tier1/mixed_small`
+- a provider-matrix runner that reuses one judgment set across local-fs and S3-compatible modes
+- a mutation applicator for `tier3/freshness_chaos`
+- baseline result manifests for the new suites under ignored local `benchmarks/results/`

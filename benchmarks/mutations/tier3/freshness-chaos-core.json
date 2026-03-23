@@ -1,0 +1,26 @@
+{
+  "schema_version": "1.0",
+  "mutation_set_id": "freshness-chaos-core",
+  "description": "Canonical mutation set for Tier 3 freshness runs. Apply after a successful warm-manifest sync and before executing the query cases.",
+  "mutations": [
+    {
+      "mutation_id": "delete-private-secret",
+      "provider_mode": "s3_compatible",
+      "op": "delete_object",
+      "target": "docs/private/secret.txt"
+    },
+    {
+      "mutation_id": "deny-finance-invoice",
+      "provider_mode": "s3_compatible",
+      "op": "deny_read",
+      "target": "docs/finance/invoice-7781.pdf"
+    },
+    {
+      "mutation_id": "replace-report-content",
+      "provider_mode": "s3_compatible",
+      "op": "overwrite_object",
+      "target": "docs/reports/riverglass-summary.txt",
+      "note": "Used for stale-content follow-up runs where the manifest or imported bundle is intentionally behind the object store."
+    }
+  ]
+}

@@ -1,0 +1,39 @@
+{
+  "schema_version": "1.0",
+  "judgment_set_id": "tier3-freshness-chaos",
+  "corpus_id": "tier3.s3_compatible.freshness_chaos",
+  "cases": [
+    {
+      "case_id": "deleted-after-sync",
+      "coverage_expectation": {
+        "status": "partial_required",
+        "allowed_partial_reasons": [
+          "deleted"
+        ]
+      },
+      "minimum_expected_matches": 0,
+      "relevant_results": [
+        {
+          "document_id": "docs/private/secret.txt",
+          "relevance_grade": 3
+        }
+      ]
+    },
+    {
+      "case_id": "denied-after-sync",
+      "coverage_expectation": {
+        "status": "partial_required",
+        "allowed_partial_reasons": [
+          "denied"
+        ]
+      },
+      "minimum_expected_matches": 0,
+      "relevant_results": [
+        {
+          "document_id": "docs/finance/invoice-7781.pdf",
+          "relevance_grade": 3
+        }
+      ]
+    }
+  ]
+}

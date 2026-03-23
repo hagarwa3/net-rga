@@ -188,6 +188,25 @@ Measures:
 - failure accounting
 - behavior consistency after re-sync
 
+## Tracked Scaffold Expansion
+
+The tracked repo scaffold should now include benchmark definitions beyond Tier 0, even before the larger corpora are materialized locally.
+
+Tracked definition sets:
+
+- `benchmarks/cases/tier1/mixed_small/`
+  - PDF, DOCX, and XLSX search cases that validate extraction and anchor quality
+- `benchmarks/cases/tier1/provider_matrix/`
+  - parity cases that run the same query/judgment pair across `local_fs` and `s3_compatible`
+- `benchmarks/cases/tier3/freshness_chaos/`
+  - stale/delete/deny scenarios that require explicit partial-coverage expectations
+- `benchmarks/judgments/tier1/` and `benchmarks/judgments/tier3/`
+  - judgment sets for the new suites
+- `benchmarks/mutations/tier3/`
+  - mutation set definitions used to make freshness scenarios reproducible
+
+These files are part of the tracked benchmark spec and should remain in git. The actual corpora they reference remain externalized or locally materialized.
+
 ## Corpus Design
 
 The suite should include both synthetic and semi-realistic corpora.

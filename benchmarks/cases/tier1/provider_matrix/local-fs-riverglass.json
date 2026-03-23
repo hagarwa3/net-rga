@@ -1,0 +1,34 @@
+{
+  "schema_version": "1.0",
+  "case_id": "provider-matrix-local-fs-riverglass",
+  "suite_id": "tier1-provider-matrix",
+  "tier": "tier1",
+  "corpus_id": "tier1.shared.provider_matrix",
+  "title": "Local filesystem baseline for provider parity",
+  "description": "Run the same literal search workload used in the provider matrix against the local filesystem corpus build.",
+  "tags": [
+    "provider_matrix",
+    "local_fs",
+    "literal"
+  ],
+  "query": {
+    "text": "riverglass regional summary",
+    "syntax": "literal",
+    "case_sensitivity": "smart",
+    "path_globs_include": [
+      "docs/reports/**"
+    ],
+    "max_results": 5
+  },
+  "run_mode": {
+    "provider_mode": "local_fs",
+    "manifest_state": "warm",
+    "content_cache_state": "cold",
+    "backend_mode": "enabled"
+  },
+  "expected_results": {
+    "judgment_file": "benchmarks/judgments/tier1/provider_matrix.json",
+    "judgment_case_id": "provider-matrix-riverglass",
+    "requires_complete_coverage": true
+  }
+}

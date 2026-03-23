@@ -1,0 +1,35 @@
+{
+  "schema_version": "1.0",
+  "case_id": "deleted-after-sync",
+  "suite_id": "tier3-freshness-chaos",
+  "tier": "tier3",
+  "corpus_id": "tier3.s3_compatible.freshness_chaos",
+  "title": "Deleted object after manifest warm-up",
+  "description": "Validate that a deleted object produces partial coverage instead of a false negative or false complete result.",
+  "tags": [
+    "freshness",
+    "deleted",
+    "partial_coverage"
+  ],
+  "query": {
+    "text": "nebula-flag",
+    "syntax": "literal",
+    "case_sensitivity": "smart",
+    "path_globs_include": [
+      "docs/private/**"
+    ],
+    "max_results": 5
+  },
+  "run_mode": {
+    "provider_mode": "s3_compatible",
+    "manifest_state": "stale",
+    "content_cache_state": "cold",
+    "backend_mode": "enabled",
+    "mutation_set_id": "freshness-chaos-core"
+  },
+  "expected_results": {
+    "judgment_file": "benchmarks/judgments/tier3/freshness_chaos.json",
+    "judgment_case_id": "deleted-after-sync",
+    "requires_complete_coverage": false
+  }
+}

@@ -1,0 +1,71 @@
+{
+  "schema_version": "1.0",
+  "judgment_set_id": "tier1-mixed-small",
+  "corpus_id": "tier1.local_fs.mixed_small",
+  "cases": [
+    {
+      "case_id": "pdf-policy-needle",
+      "coverage_expectation": {
+        "status": "complete_required"
+      },
+      "minimum_expected_matches": 1,
+      "relevant_results": [
+        {
+          "document_id": "docs/policies/compliance-policy.pdf",
+          "relevance_grade": 3,
+          "acceptable_anchors": [
+            {
+              "anchor_kind": "page_span",
+              "locator": {
+                "path": "docs/policies/compliance-policy.pdf",
+                "page": 4
+              },
+              "tolerance": "same_container"
+            }
+          ],
+          "snippet_expectations": [
+            {
+              "must_include_terms": [
+                "riverglass",
+                "compliance",
+                "exception"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "docx-checklist-anchor",
+      "coverage_expectation": {
+        "status": "complete_required"
+      },
+      "minimum_expected_matches": 1,
+      "relevant_results": [
+        {
+          "document_id": "docs/playbooks/orchid-launch.docx",
+          "relevance_grade": 3,
+          "acceptable_anchors": [
+            {
+              "anchor_kind": "chunk_span",
+              "locator": {
+                "path": "docs/playbooks/orchid-launch.docx",
+                "chunk_id": "paragraph-3"
+              },
+              "tolerance": "same_container"
+            }
+          ],
+          "snippet_expectations": [
+            {
+              "must_include_terms": [
+                "orchid",
+                "launch",
+                "checklist"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

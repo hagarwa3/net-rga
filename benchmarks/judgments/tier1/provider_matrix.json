@@ -1,0 +1,37 @@
+{
+  "schema_version": "1.0",
+  "judgment_set_id": "tier1-provider-matrix",
+  "corpus_id": "tier1.shared.provider_matrix",
+  "cases": [
+    {
+      "case_id": "provider-matrix-riverglass",
+      "coverage_expectation": {
+        "status": "complete_required"
+      },
+      "minimum_expected_matches": 1,
+      "relevant_results": [
+        {
+          "document_id": "docs/reports/riverglass-summary.txt",
+          "relevance_grade": 3,
+          "acceptable_anchors": [
+            {
+              "anchor_kind": "line_span",
+              "locator": {
+                "path": "docs/reports/riverglass-summary.txt",
+                "line_start": 2,
+                "line_end": 2
+              },
+              "tolerance": "nearby"
+            }
+          ],
+          "snippet_expectations": [
+            {
+              "preferred_phrase": "riverglass regional summary"
+            }
+          ]
+        }
+      ],
+      "notes": "Both local and S3-compatible runs should resolve to the same relevant document and equivalent snippet content."
+    }
+  ]
+}
