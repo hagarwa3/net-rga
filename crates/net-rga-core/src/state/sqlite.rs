@@ -234,6 +234,48 @@ impl ManifestDb {
             )
             .map_err(ManifestError::Sqlite)
     }
+
+    pub fn record_failure(
+        &self,
+        corpus_id: &str,
+        document_id: Option<&str>,
+        phase: &str,
+        error_kind: &str,
+        message: &str,
+        recorded_at: &str,
+    ) -> Result<(), ManifestError> {
+        self.connection.execute(
+            "INSERT INTO failure_records (corpus_id, document_id, phase, error_kind, message, recorded_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![corpus_id, document_id, phase, error_kind, message, recorded_at],
+        )?;
+        Ok(())
+    }
+
+    pub fn failure_record_count(&self, corpus_id: &str) -> Result<u64, ManifestError> {
+        self.connection
+            .query_row(
+                "SELECT COUNT(*) FROM failure_records WHERE corpus_id = ?1",
+                [corpus_id],
+                |row| row.get(0),
+            )
+            .map_err(ManifestError::Sqlite)
+    }
+
+    pub fn latest_failure_kind(&self, corpus_id: &str) -> Result<Option<String>, ManifestError> {
+        let mut statement = self.connection.prepare(
+            "SELECT error_kind FROM failure_records
+             WHERE corpus_id = ?1
+             ORDER BY id DESC
+             LIMIT 1",
+        )?;
+        let failure_kind = statement.query_row([corpus_id], |row| row.get(0));
+        match failure_kind {
+            Ok(value) => Ok(Some(value)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(error) => Err(ManifestError::Sqlite(error)),
+        }
+    }
 }
 
 pub fn open_manifest_db(path: &Path) -> Result<Connection, ManifestError> {
@@ -497,6 +539,53 @@ mod tests {
                     .tombstone_count("local")
                     .unwrap_or_else(|error| panic!("tombstone count should query: {error}")),
                 1
+            );
+        }
+        fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn manifest_db_records_failures() {
+        let path = temp_manifest_path();
+        {
+            let manifest =
+                ManifestDb::open(&path).unwrap_or_else(|error| panic!("manifest should open: {error}"));
+            let corpus = CorpusConfig {
+                id: "local".to_owned(),
+                display_name: Some("Local".to_owned()),
+                provider: ProviderConfig::LocalFs {
+                    root: PathBuf::from("/tmp/docs"),
+                },
+                include_globs: Vec::new(),
+                exclude_globs: Vec::new(),
+                backend: None,
+            };
+            manifest
+                .upsert_corpus(&corpus, "local_fs", "/tmp/docs", "id = 'local'", "1000")
+                .unwrap_or_else(|error| panic!("corpus should persist: {error}"));
+            manifest
+                .record_failure(
+                    "local",
+                    None,
+                    "sync",
+                    "permission_denied",
+                    "access denied",
+                    "1000",
+                )
+                .unwrap_or_else(|error| panic!("failure should record: {error}"));
+
+            assert_eq!(
+                manifest
+                    .failure_record_count("local")
+                    .unwrap_or_else(|error| panic!("failure count should query: {error}")),
+                1
+            );
+            assert_eq!(
+                manifest
+                    .latest_failure_kind("local")
+                    .unwrap_or_else(|error| panic!("failure kind should query: {error}"))
+                    .as_deref(),
+                Some("permission_denied")
             );
         }
         fs::remove_file(path).ok();

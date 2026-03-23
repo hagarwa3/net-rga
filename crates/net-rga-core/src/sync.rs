@@ -66,6 +66,14 @@ pub fn sync_corpus(paths: &RuntimePaths, corpus_id: &str) -> Result<SyncRunSumma
 
 pub fn sync_corpus_config(paths: &RuntimePaths, corpus: &CorpusConfig) -> Result<SyncRunSummary, SyncError> {
     let provider = provider_for_config(&corpus.provider)?;
+    sync_corpus_with_provider(paths, corpus, provider.as_ref())
+}
+
+fn sync_corpus_with_provider(
+    paths: &RuntimePaths,
+    corpus: &CorpusConfig,
+    provider: &dyn Provider,
+) -> Result<SyncRunSummary, SyncError> {
     let layout = StateLayout::for_corpus(&paths.state_root, &crate::domain::CorpusId(corpus.id.clone()));
     let manifest = ManifestDb::open(&layout.manifest_db)?;
     let started_at = timestamp_now();
@@ -89,7 +97,21 @@ pub fn sync_corpus_config(paths: &RuntimePaths, corpus: &CorpusConfig) -> Result
     let mut pages_processed = 0_u64;
 
     loop {
-        let page = provider.list("", cursor.as_deref())?;
+        let page = match provider.list("", cursor.as_deref()) {
+            Ok(page) => page,
+            Err(error) => {
+                let recorded_at = timestamp_now();
+                manifest.record_failure(
+                    &corpus.id,
+                    None,
+                    "sync",
+                    contract_error_kind(&error),
+                    &error.to_string(),
+                    &recorded_at,
+                )?;
+                return Err(SyncError::Contract(error));
+            }
+        };
         for document in &page.documents {
             manifest.upsert_document(&corpus.id, document, &started_at)?;
         }
@@ -136,6 +158,18 @@ fn provider_for_config(config: &ProviderConfig) -> Result<Box<dyn Provider>, Con
     }
 }
 
+fn contract_error_kind(error: &ContractError) -> &'static str {
+    match error {
+        ContractError::NotFound(_) => "not_found",
+        ContractError::PermissionDenied(_) => "permission_denied",
+        ContractError::Throttled(_) => "throttled",
+        ContractError::Transient(_) => "transient",
+        ContractError::Unsupported(_) => "unsupported",
+        ContractError::Invalid(_) => "invalid",
+        ContractError::Io(_) => "io",
+    }
+}
+
 fn provider_kind_label(config: &ProviderConfig) -> &'static str {
     match config {
         ProviderConfig::LocalFs { .. } => "local_fs",
@@ -170,6 +204,8 @@ mod tests {
 
     use super::{SyncCheckpointName, sync_corpus};
     use crate::config::{CorpusConfig, ProviderConfig};
+    use crate::contracts::{ContractError, ListPage, Provider, ReadPayload, ResolvedDocument};
+    use crate::domain::{DocumentId, DocumentLocator, DocumentMeta};
     use crate::runtime::{ConfigStore, RuntimePaths};
     use crate::state::ManifestDb;
 
@@ -273,6 +309,67 @@ mod tests {
                 .tombstone_count("local")
                 .unwrap_or_else(|error| panic!("tombstone count should query: {error}")),
             1
+        );
+
+        fs::remove_dir_all(state_root).ok();
+    }
+
+    struct FailingProvider;
+
+    impl Provider for FailingProvider {
+        fn list(&self, _prefix: &str, _cursor: Option<&str>) -> Result<ListPage, ContractError> {
+            Err(ContractError::PermissionDenied("access denied".to_owned()))
+        }
+
+        fn stat(&self, _document_id: &DocumentId) -> Result<DocumentMeta, ContractError> {
+            Err(ContractError::Unsupported("stat not used".to_owned()))
+        }
+
+        fn read(
+            &self,
+            _document_id: &DocumentId,
+            _range: Option<crate::contracts::ByteRange>,
+        ) -> Result<ReadPayload, ContractError> {
+            Err(ContractError::Unsupported("read not used".to_owned()))
+        }
+
+        fn resolve(&self, _locator: &DocumentLocator) -> Result<ResolvedDocument, ContractError> {
+            Err(ContractError::Unsupported("resolve not used".to_owned()))
+        }
+    }
+
+    #[test]
+    fn sync_records_provider_failures() {
+        let state_root = temp_state_root();
+        let paths = RuntimePaths::from_state_root(state_root.clone());
+        let corpus = CorpusConfig {
+            id: "local".to_owned(),
+            display_name: Some("Local".to_owned()),
+            provider: ProviderConfig::LocalFs {
+                root: state_root.join("fixtures"),
+            },
+            include_globs: Vec::new(),
+            exclude_globs: Vec::new(),
+            backend: None,
+        };
+
+        let result = super::sync_corpus_with_provider(&paths, &corpus, &FailingProvider);
+        assert!(result.is_err());
+
+        let manifest = ManifestDb::open(&state_root.join("corpora/local/manifest.db"))
+            .unwrap_or_else(|error| panic!("manifest should open: {error}"));
+        assert_eq!(
+            manifest
+                .failure_record_count("local")
+                .unwrap_or_else(|error| panic!("failure count should query: {error}")),
+            1
+        );
+        assert_eq!(
+            manifest
+                .latest_failure_kind("local")
+                .unwrap_or_else(|error| panic!("failure kind should query: {error}"))
+                .as_deref(),
+            Some("permission_denied")
         );
 
         fs::remove_dir_all(state_root).ok();

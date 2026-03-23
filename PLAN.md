@@ -614,7 +614,7 @@ Checklist:
 - [x] Implement sync orchestration and checkpoint persistence
 - [x] Upsert object metadata and version markers into the manifest
 - [x] Mark deleted objects as tombstoned when reconciliation proves absence
-- [ ] Record sync errors, permission failures, and transient failures
+- [x] Record sync errors, permission failures, and transient failures
 - [ ] Add sync summary with counts for new, updated, deleted, denied, and failed objects
 - [ ] Add integration tests for repeated sync, deletion, and RBAC drift across local and S3 providers
 
