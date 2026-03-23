@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use net_rga_core::{
     ConfigStore, CorpusConfig, CorpusId, ProviderConfig, RuntimePaths, SearchOutputFormat,
-    SearchRequest, sync_corpus,
+    SearchRequest, SearchResponse, execute_search, sync_corpus,
 };
 
 #[derive(Debug, Parser)]
@@ -222,10 +222,13 @@ fn handle_sync_with_paths(paths: &RuntimePaths, corpus: &str) -> Result<String, 
 
 fn handle_search(args: SearchArgs) -> Result<String, String> {
     let request = build_search_request(&args);
-    Ok(format!(
-        "placeholder: search {} {} format={:?}",
-        request.query, request.corpus_id.0, request.output_format
-    ))
+    let paths = RuntimePaths::from_env().map_err(|error| error.to_string())?;
+    handle_search_with_paths(&paths, &request)
+}
+
+fn handle_search_with_paths(paths: &RuntimePaths, request: &SearchRequest) -> Result<String, String> {
+    let response = execute_search(paths, request).map_err(|error| error.to_string())?;
+    Ok(render_search_text(&response))
 }
 
 fn build_search_request(args: &SearchArgs) -> SearchRequest {
@@ -249,6 +252,30 @@ fn build_search_request(args: &SearchArgs) -> SearchRequest {
     }
 }
 
+fn render_search_text(response: &SearchResponse) -> String {
+    if response.matches.is_empty() {
+        return "no matches".to_owned();
+    }
+
+    response
+        .matches
+        .iter()
+        .map(|search_match| {
+            let path = search_match
+                .anchor
+                .locator
+                .path
+                .as_deref()
+                .unwrap_or(search_match.document_id.0.as_str());
+            match search_match.anchor.locator.line_start {
+                Some(line_start) => format!("{path}:{line_start}:{}", search_match.snippet),
+                None => format!("{path}:{}", search_match.snippet),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 #[cfg(test)]
 mod tests {
     use clap::Parser;
@@ -260,7 +287,10 @@ mod tests {
 
     use net_rga_core::{ConfigStore, CorpusConfig, ProviderConfig, RuntimePaths, SearchOutputFormat};
 
-    use super::{Cli, Commands, CorpusSubcommand, build_search_request, handle_sync_with_paths, run};
+    use super::{
+        Cli, Commands, CorpusSubcommand, build_search_request, handle_search_with_paths,
+        handle_sync_with_paths,
+    };
 
     fn temp_state_root() -> PathBuf {
         let nanos = SystemTime::now()
@@ -296,9 +326,40 @@ mod tests {
 
     #[test]
     fn renders_placeholder_search_output() {
+        let state_root = temp_state_root();
+        let corpus_root = state_root.join("fixtures");
+        fs::create_dir_all(corpus_root.join("docs"))
+            .unwrap_or_else(|error| panic!("fixture dir should create: {error}"));
+        fs::write(corpus_root.join("docs/report.txt"), "riverglass appears here\nother line")
+            .unwrap_or_else(|error| panic!("fixture should write: {error}"));
+
+        let paths = RuntimePaths::from_state_root(state_root.clone());
+        let store = ConfigStore::new(paths.clone());
+        store
+            .add_corpus(CorpusConfig {
+                id: "local".to_owned(),
+                display_name: Some("Local".to_owned()),
+                provider: ProviderConfig::LocalFs {
+                    root: corpus_root.clone(),
+                },
+                include_globs: Vec::new(),
+                exclude_globs: Vec::new(),
+                backend: None,
+            })
+            .unwrap_or_else(|error| panic!("corpus should save: {error}"));
+        handle_sync_with_paths(&paths, "local")
+            .unwrap_or_else(|error| panic!("sync should succeed: {error}"));
+
         let cli = Cli::parse_from(["net-rga", "search", "riverglass", "local"]);
-        let output = run(cli).unwrap_or_else(|error| panic!("search placeholder should render: {error}"));
-        assert_eq!(output, "placeholder: search riverglass local format=Text");
+        let request = match cli.command {
+            Commands::Search(args) => build_search_request(&args),
+            _ => panic!("expected search command"),
+        };
+        let output = handle_search_with_paths(&paths, &request)
+            .unwrap_or_else(|error| panic!("search should render: {error}"));
+        assert_eq!(output, "docs/report.txt:1:riverglass appears here");
+
+        fs::remove_dir_all(state_root).ok();
     }
 
     #[test]

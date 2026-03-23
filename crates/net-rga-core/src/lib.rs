@@ -23,7 +23,7 @@ pub use domain::{
 };
 pub use providers::{LocalFsProvider, S3ConnectionConfig, S3Provider};
 pub use runtime::{ConfigStore, RuntimeError, RuntimePaths};
-pub use search_engine::{SearchEngineError, filter_manifest_documents, rank_documents};
+pub use search_engine::{SearchEngineError, execute_search, filter_manifest_documents, rank_documents};
 pub use state::MANIFEST_SCHEMA_V1;
 pub use state::{ManifestDb, ManifestError, apply_manifest_migrations, open_manifest_db};
 pub use sync::{SyncCheckpointName, SyncError, SyncRunSummary, sync_corpus, sync_corpus_with_provider};

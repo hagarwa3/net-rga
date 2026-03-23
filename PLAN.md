@@ -652,7 +652,7 @@ Checklist:
 - [x] Implement manifest-side filtering for globs and metadata predicates
 - [x] Implement candidate ranking for small, recent, and likely-relevant objects
 - [x] Implement remote fetch and text verification path
-- [ ] Implement grep-like rendering over anchor-backed internal results
+- [x] Implement grep-like rendering over anchor-backed internal results
 - [ ] Emit stable text and JSON summaries with coverage fields
 - [ ] Define exit-code behavior for match/no-match/partial cases
 
