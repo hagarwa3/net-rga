@@ -13,6 +13,12 @@ pub struct Cli {
     pub command: Commands,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CommandOutcome {
+    pub output: String,
+    pub exit_code: u8,
+}
+
 #[derive(Debug, Subcommand)]
 pub enum Commands {
     Corpus(CorpusCommand),
@@ -113,18 +119,18 @@ pub enum ProviderArg {
     S3,
 }
 
-pub fn run(cli: Cli) -> Result<String, String> {
+pub fn run(cli: Cli) -> Result<CommandOutcome, String> {
     match cli.command {
         Commands::Corpus(corpus) => match corpus.command {
-            CorpusSubcommand::Add(args) => handle_corpus_add(args),
-            CorpusSubcommand::Remove(args) => handle_corpus_remove(args),
-            CorpusSubcommand::List => handle_corpus_list(),
+            CorpusSubcommand::Add(args) => handle_corpus_add(args).map(ok_outcome),
+            CorpusSubcommand::Remove(args) => handle_corpus_remove(args).map(ok_outcome),
+            CorpusSubcommand::List => handle_corpus_list().map(ok_outcome),
         },
-        Commands::Sync(args) => handle_sync(args),
+        Commands::Sync(args) => handle_sync(args).map(ok_outcome),
         Commands::Search(args) => handle_search(args),
-        Commands::Inspect(args) => Ok(format!("placeholder: inspect {}", args.corpus)),
-        Commands::Export(args) => Ok(format!("placeholder: export {} {}", args.corpus, args.bundle)),
-        Commands::Import(args) => Ok(format!("placeholder: import {}", args.bundle)),
+        Commands::Inspect(args) => Ok(ok_outcome(format!("placeholder: inspect {}", args.corpus))),
+        Commands::Export(args) => Ok(ok_outcome(format!("placeholder: export {} {}", args.corpus, args.bundle))),
+        Commands::Import(args) => Ok(ok_outcome(format!("placeholder: import {}", args.bundle))),
     }
 }
 
@@ -220,15 +226,18 @@ fn handle_sync_with_paths(paths: &RuntimePaths, corpus: &str) -> Result<String, 
     ))
 }
 
-fn handle_search(args: SearchArgs) -> Result<String, String> {
+fn handle_search(args: SearchArgs) -> Result<CommandOutcome, String> {
     let request = build_search_request(&args);
     let paths = RuntimePaths::from_env().map_err(|error| error.to_string())?;
     handle_search_with_paths(&paths, &request)
 }
 
-fn handle_search_with_paths(paths: &RuntimePaths, request: &SearchRequest) -> Result<String, String> {
+fn handle_search_with_paths(paths: &RuntimePaths, request: &SearchRequest) -> Result<CommandOutcome, String> {
     let response = execute_search(paths, request).map_err(|error| error.to_string())?;
-    render_search_output(&response)
+    Ok(CommandOutcome {
+        output: render_search_output(&response)?,
+        exit_code: search_exit_code(&response),
+    })
 }
 
 fn build_search_request(args: &SearchArgs) -> SearchRequest {
@@ -299,6 +308,21 @@ fn render_search_output(response: &SearchResponse) -> Result<String, String> {
         SearchOutputFormat::Text => Ok(render_search_text(response)),
         SearchOutputFormat::Json => serde_json::to_string_pretty(response).map_err(|error| error.to_string()),
     }
+}
+
+fn search_exit_code(response: &SearchResponse) -> u8 {
+    if matches!(response.summary.coverage_status, net_rga_core::CoverageStatus::Partial) {
+        return 3;
+    }
+    if response.matches.is_empty() {
+        1
+    } else {
+        0
+    }
+}
+
+fn ok_outcome(output: String) -> CommandOutcome {
+    CommandOutcome { output, exit_code: 0 }
 }
 
 #[cfg(test)]
@@ -380,12 +404,13 @@ mod tests {
             Commands::Search(args) => build_search_request(&args),
             _ => panic!("expected search command"),
         };
-        let output = handle_search_with_paths(&paths, &request)
+        let outcome = handle_search_with_paths(&paths, &request)
             .unwrap_or_else(|error| panic!("search should render: {error}"));
         assert_eq!(
-            output,
+            outcome.output,
             "docs/report.txt:1:riverglass appears here\n-- summary: corpus=local matches=1 candidates=1 fetched=1 coverage=complete deleted=0 denied=0 stale=0 unsupported=0 failed=0"
         );
+        assert_eq!(outcome.exit_code, 0);
 
         fs::remove_dir_all(state_root).ok();
     }
@@ -424,10 +449,11 @@ mod tests {
         let output = handle_search_with_paths(&paths, &request)
             .unwrap_or_else(|error| panic!("json search should render: {error}"));
         let parsed: serde_json::Value =
-            serde_json::from_str(&output).unwrap_or_else(|error| panic!("json should parse: {error}"));
+            serde_json::from_str(&output.output).unwrap_or_else(|error| panic!("json should parse: {error}"));
 
         assert_eq!(parsed["summary"]["coverage_status"], "complete");
         assert_eq!(parsed["summary"]["verified_matches"], 1);
+        assert_eq!(output.exit_code, 0);
 
         fs::remove_dir_all(state_root).ok();
     }
@@ -499,6 +525,90 @@ mod tests {
         let output = handle_sync_with_paths(&RuntimePaths::from_state_root(state_root.clone()), "local")
             .unwrap_or_else(|error| panic!("sync should succeed: {error}"));
         assert!(output.contains("synced local"));
+        fs::remove_dir_all(state_root).ok();
+    }
+
+    #[test]
+    fn search_exit_code_is_one_for_complete_no_match() {
+        let state_root = temp_state_root();
+        let corpus_root = state_root.join("fixtures");
+        fs::create_dir_all(corpus_root.join("docs"))
+            .unwrap_or_else(|error| panic!("fixture dir should create: {error}"));
+        fs::write(corpus_root.join("docs/report.txt"), "different content")
+            .unwrap_or_else(|error| panic!("fixture should write: {error}"));
+
+        let paths = RuntimePaths::from_state_root(state_root.clone());
+        let store = ConfigStore::new(paths.clone());
+        store
+            .add_corpus(CorpusConfig {
+                id: "local".to_owned(),
+                display_name: Some("Local".to_owned()),
+                provider: ProviderConfig::LocalFs {
+                    root: corpus_root.clone(),
+                },
+                include_globs: Vec::new(),
+                exclude_globs: Vec::new(),
+                backend: None,
+            })
+            .unwrap_or_else(|error| panic!("corpus should save: {error}"));
+        handle_sync_with_paths(&paths, "local")
+            .unwrap_or_else(|error| panic!("sync should succeed: {error}"));
+
+        let cli = Cli::parse_from(["net-rga", "search", "riverglass", "local"]);
+        let request = match cli.command {
+            Commands::Search(args) => build_search_request(&args),
+            _ => panic!("expected search command"),
+        };
+        let outcome = handle_search_with_paths(&paths, &request)
+            .unwrap_or_else(|error| panic!("search should render: {error}"));
+
+        assert_eq!(outcome.exit_code, 1);
+        assert!(outcome.output.starts_with("no matches"));
+
+        fs::remove_dir_all(state_root).ok();
+    }
+
+    #[test]
+    fn search_exit_code_is_three_for_partial_coverage() {
+        let state_root = temp_state_root();
+        let corpus_root = state_root.join("fixtures");
+        fs::create_dir_all(corpus_root.join("docs"))
+            .unwrap_or_else(|error| panic!("fixture dir should create: {error}"));
+        fs::create_dir_all(corpus_root.join("media"))
+            .unwrap_or_else(|error| panic!("fixture dir should create: {error}"));
+        fs::write(corpus_root.join("docs/report.txt"), "riverglass appears here")
+            .unwrap_or_else(|error| panic!("fixture should write: {error}"));
+        fs::write(corpus_root.join("media/video.mp4"), b"binary-data")
+            .unwrap_or_else(|error| panic!("fixture should write: {error}"));
+
+        let paths = RuntimePaths::from_state_root(state_root.clone());
+        let store = ConfigStore::new(paths.clone());
+        store
+            .add_corpus(CorpusConfig {
+                id: "local".to_owned(),
+                display_name: Some("Local".to_owned()),
+                provider: ProviderConfig::LocalFs {
+                    root: corpus_root.clone(),
+                },
+                include_globs: Vec::new(),
+                exclude_globs: Vec::new(),
+                backend: None,
+            })
+            .unwrap_or_else(|error| panic!("corpus should save: {error}"));
+        handle_sync_with_paths(&paths, "local")
+            .unwrap_or_else(|error| panic!("sync should succeed: {error}"));
+
+        let cli = Cli::parse_from(["net-rga", "search", "riverglass", "local"]);
+        let request = match cli.command {
+            Commands::Search(args) => build_search_request(&args),
+            _ => panic!("expected search command"),
+        };
+        let outcome = handle_search_with_paths(&paths, &request)
+            .unwrap_or_else(|error| panic!("search should render: {error}"));
+
+        assert_eq!(outcome.exit_code, 3);
+        assert!(outcome.output.contains("coverage=partial"));
+
         fs::remove_dir_all(state_root).ok();
     }
 }

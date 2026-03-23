@@ -8,13 +8,13 @@ use shell::{Cli, run};
 fn main() -> ExitCode {
     let cli = Cli::parse();
     match run(cli) {
-        Ok(message) => {
-            println!("{message}");
-            ExitCode::SUCCESS
+        Ok(outcome) => {
+            println!("{}", outcome.output);
+            ExitCode::from(outcome.exit_code)
         }
         Err(message) => {
             eprintln!("{message}");
-            ExitCode::FAILURE
+            ExitCode::from(2)
         }
     }
 }

@@ -654,7 +654,7 @@ Checklist:
 - [x] Implement remote fetch and text verification path
 - [x] Implement grep-like rendering over anchor-backed internal results
 - [x] Emit stable text and JSON summaries with coverage fields
-- [ ] Define exit-code behavior for match/no-match/partial cases
+- [x] Define exit-code behavior for match/no-match/partial cases
 
 ### Phase 4: Extraction adapters and optional lexical index
 
