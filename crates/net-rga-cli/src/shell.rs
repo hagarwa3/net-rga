@@ -2,9 +2,9 @@ use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use net_rga_core::{
-    ConfigStore, CorpusConfig, CorpusId, ProviderConfig, RuntimePaths, SearchOutputFormat,
-    SearchRequest, SearchResponse, execute_search, export_corpus_bundle, import_corpus_bundle,
-    sync_corpus,
+    ConfigStore, CorpusConfig, CorpusId, ManifestDb, ProviderConfig, RuntimePaths,
+    SearchOutputFormat, SearchRequest, SearchResponse, StateLayout, execute_search,
+    export_corpus_bundle, import_corpus_bundle, sync_corpus,
 };
 
 #[derive(Debug, Parser)]
@@ -129,7 +129,7 @@ pub fn run(cli: Cli) -> Result<CommandOutcome, String> {
         },
         Commands::Sync(args) => handle_sync(args).map(ok_outcome),
         Commands::Search(args) => handle_search(args),
-        Commands::Inspect(args) => Ok(ok_outcome(format!("placeholder: inspect {}", args.corpus))),
+        Commands::Inspect(args) => handle_inspect(args).map(ok_outcome),
         Commands::Export(args) => handle_export(args).map(ok_outcome),
         Commands::Import(args) => handle_import(args).map(ok_outcome),
     }
@@ -231,6 +231,73 @@ fn handle_search(args: SearchArgs) -> Result<CommandOutcome, String> {
     let request = build_search_request(&args);
     let paths = RuntimePaths::from_env().map_err(|error| error.to_string())?;
     handle_search_with_paths(&paths, &request)
+}
+
+fn handle_inspect(args: InspectArgs) -> Result<String, String> {
+    let paths = RuntimePaths::from_env().map_err(|error| error.to_string())?;
+    handle_inspect_with_paths(&paths, &args.corpus)
+}
+
+fn handle_inspect_with_paths(paths: &RuntimePaths, corpus_id: &str) -> Result<String, String> {
+    let store = ConfigStore::new(paths.clone());
+    let corpus = store
+        .list_corpora()
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .find(|candidate| candidate.id == corpus_id)
+        .ok_or_else(|| format!("unknown corpus {corpus_id}"))?;
+    let layout = StateLayout::for_corpus(&paths.state_root, &CorpusId(corpus.id.clone()));
+
+    let mut lines = vec![
+        format!("corpus={}", corpus.id),
+        format!("provider={}", provider_label(&corpus.provider)),
+        format!("source={}", provider_source(&corpus.provider)),
+        format!("manifest={}", layout.manifest_db.display()),
+        format!("index={}", layout.index_dir.join("index.db").display()),
+        format!("cache={}", layout.cache_dir.display()),
+    ];
+
+    if layout.manifest_db.exists() {
+        let manifest = ManifestDb::open(&layout.manifest_db).map_err(|error| error.to_string())?;
+        lines.push(format!(
+            "documents={}",
+            manifest.document_count(&corpus.id).map_err(|error| error.to_string())?
+        ));
+        lines.push(format!(
+            "tombstones={}",
+            manifest.tombstone_count(&corpus.id).map_err(|error| error.to_string())?
+        ));
+        lines.push(format!(
+            "failures={}",
+            manifest
+                .failure_record_count(&corpus.id)
+                .map_err(|error| error.to_string())?
+        ));
+        lines.push(format!(
+            "last_sync_started_at={}",
+            manifest
+                .sync_checkpoint(&corpus.id, "last_sync_started_at")
+                .map_err(|error| error.to_string())?
+                .unwrap_or_else(|| "-".to_owned())
+        ));
+        lines.push(format!(
+            "last_sync_completed_at={}",
+            manifest
+                .sync_checkpoint(&corpus.id, "last_sync_completed_at")
+                .map_err(|error| error.to_string())?
+                .unwrap_or_else(|| "-".to_owned())
+        ));
+    } else {
+        lines.push("documents=unsynced".to_owned());
+    }
+
+    lines.push(format!(
+        "index_present={}",
+        layout.index_dir.join("index.db").exists()
+    ));
+    lines.push(format!("cache_present={}", layout.cache_dir.exists()));
+
+    Ok(lines.join("\n"))
 }
 
 fn handle_export(args: ExportArgs) -> Result<String, String> {
@@ -352,6 +419,23 @@ fn ok_outcome(output: String) -> CommandOutcome {
     CommandOutcome { output, exit_code: 0 }
 }
 
+fn provider_label(provider: &ProviderConfig) -> &'static str {
+    match provider {
+        ProviderConfig::LocalFs { .. } => "local_fs",
+        ProviderConfig::S3 { .. } => "s3",
+    }
+}
+
+fn provider_source(provider: &ProviderConfig) -> String {
+    match provider {
+        ProviderConfig::LocalFs { root } => root.display().to_string(),
+        ProviderConfig::S3 { bucket, prefix, .. } => match prefix {
+            Some(prefix) => format!("{bucket}/{prefix}"),
+            None => bucket.clone(),
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use clap::Parser;
@@ -365,8 +449,8 @@ mod tests {
     use net_rga_core::{ConfigStore, CorpusConfig, ProviderConfig, RuntimePaths, SearchOutputFormat};
 
     use super::{
-        Cli, Commands, CorpusSubcommand, build_search_request, handle_search_with_paths,
-        handle_sync_with_paths,
+        Cli, Commands, CorpusSubcommand, build_search_request, handle_inspect_with_paths,
+        handle_search_with_paths, handle_sync_with_paths,
     };
 
     static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -645,6 +729,43 @@ mod tests {
 
         assert_eq!(outcome.exit_code, 3);
         assert!(outcome.output.contains("coverage=partial"));
+
+        fs::remove_dir_all(state_root).ok();
+    }
+
+    #[test]
+    fn inspect_reports_manifest_and_sync_state() {
+        let state_root = temp_state_root();
+        let corpus_root = state_root.join("fixtures");
+        fs::create_dir_all(corpus_root.join("docs"))
+            .unwrap_or_else(|error| panic!("fixture dir should create: {error}"));
+        fs::write(corpus_root.join("docs/report.txt"), "riverglass appears here")
+            .unwrap_or_else(|error| panic!("fixture should write: {error}"));
+
+        let paths = RuntimePaths::from_state_root(state_root.clone());
+        let store = ConfigStore::new(paths.clone());
+        store
+            .add_corpus(CorpusConfig {
+                id: "local".to_owned(),
+                display_name: Some("Local".to_owned()),
+                provider: ProviderConfig::LocalFs {
+                    root: corpus_root.clone(),
+                },
+                include_globs: Vec::new(),
+                exclude_globs: Vec::new(),
+                backend: None,
+            })
+            .unwrap_or_else(|error| panic!("corpus should save: {error}"));
+        handle_sync_with_paths(&paths, "local")
+            .unwrap_or_else(|error| panic!("sync should succeed: {error}"));
+
+        let output = handle_inspect_with_paths(&paths, "local")
+        .unwrap_or_else(|error| panic!("inspect should succeed: {error}"));
+
+        assert!(output.contains("corpus=local"));
+        assert!(output.contains("provider=local_fs"));
+        assert!(output.contains("documents=1"));
+        assert!(output.contains("last_sync_completed_at="));
 
         fs::remove_dir_all(state_root).ok();
     }

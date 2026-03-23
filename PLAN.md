@@ -760,7 +760,7 @@ Checklist:
 - [x] Add integration tests against local filesystem and S3-compatible storage
 - [x] Add CLI snapshot tests for text and JSON output
 - [x] Expand the benchmark scaffold into mixed-format, provider-matrix, and freshness benchmark runs
-- [ ] Refresh `README.md` once implementation exists
+- [x] Refresh `README.md` once implementation exists
 - [ ] Document known limitations and deferred features
 
 ## Testing And Validation Strategy
