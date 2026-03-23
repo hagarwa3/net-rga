@@ -540,7 +540,7 @@ Checklist:
 - [x] Initialize Cargo workspace
 - [x] Add base crates and lint/test scaffolding
 - [x] Define domain models for corpus, document identity, metadata, anchors, and search summary
-- [ ] Define provider, optional capability, search backend, and extractor traits
+- [x] Define provider, optional capability, search backend, and extractor traits
 - [ ] Define config schema and local state directory conventions
 - [ ] Add a thin CLI shell with subcommand placeholders
 
