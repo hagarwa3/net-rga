@@ -19,6 +19,8 @@ This separation keeps benchmark inputs reusable. The same query case should be a
 
 ```text
 benchmarks/
+  harness.py
+  materialize_tier0_corpus.py
   README.md
   schemas/
     benchmark_case.schema.json
@@ -33,7 +35,44 @@ benchmarks/
 - Run mode lives in the case because latency and cost are only meaningful if provider/cache/backend mode is explicit.
 - Cases are versioned so the harness can evolve without making old benchmark data ambiguous.
 
+## Benchmark data management
+
+Benchmark metadata stays in git:
+
+- schemas
+- cases
+- judgments
+- mutation definitions
+- corpus generators and manifests
+
+Generated corpus data and benchmark result artifacts do not stay in git:
+
+- `benchmarks/data/`
+- `benchmarks/results/`
+
+This keeps the repo small while still preserving reproducibility.
+
+Long term, the intended model is:
+
+- tiny deterministic corpora can be materialized locally from tracked generators
+- larger corpora should be versioned by manifest and stored outside git
+- benchmark runs should record the corpus version or manifest id they used
+
 ## Planned next schemas
 
 - tiny golden corpus inputs
 - first benchmark cases and judgments
+
+## Minimal harness
+
+The first harness is intentionally small and dependency-free.
+
+Current commands:
+
+```bash
+python3 benchmarks/materialize_tier0_corpus.py
+python3 benchmarks/harness.py run
+python3 benchmarks/harness.py compare path/to/before.json path/to/after.json
+```
+
+The initial harness is only expected to support the Tier 0 local-filesystem golden corpus. It exists to give the project stable machine-readable baseline results before the main Rust implementation lands.

@@ -10,6 +10,9 @@
     "text": "riverglass",
     "syntax": "literal",
     "case_sensitivity": "smart",
+    "path_globs_include": [
+      "docs/**"
+    ],
     "max_results": 5
   },
   "run_mode": {
@@ -24,4 +27,3 @@
     "requires_complete_coverage": true
   }
 }
-

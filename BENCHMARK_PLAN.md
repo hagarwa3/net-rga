@@ -223,6 +223,28 @@ Use a mix of:
 
 The suite should avoid requiring large proprietary datasets for baseline execution.
 
+## Benchmark Data Management
+
+Benchmark metadata should stay in git:
+
+- schemas
+- benchmark cases
+- judgments
+- mutation definitions
+- corpus generators and manifests
+
+Benchmark search corpora and result artifacts should not live in git by default:
+
+- generated corpora go under an ignored local data directory
+- benchmark result files go under an ignored local results directory
+
+Long-term management model:
+
+- tiny deterministic corpora are generated locally from tracked scripts or manifests
+- medium and large corpora are versioned by manifest id and stored outside git
+- every benchmark report records the corpus version or manifest identifier it used
+- if shared benchmark data becomes necessary, use an external artifact store rather than bloating the source repo
+
 ## Query Taxonomy
 
 The benchmark must evaluate more than “find this keyword.”
@@ -587,4 +609,3 @@ The benchmark plan is actionable when:
 - the suite can fail CI for clear correctness regressions
 - nightly runs can reveal slower or more expensive query paths even when correctness stays flat
 - benchmark outputs are stable enough to become a long-term project baseline
-

@@ -1,6 +1,0 @@
-TODO
-
-- rename the Orion checklist after legal review
-- archive the 2025 pilot notes
-- confirm path-filter benchmark coverage
-
