@@ -1,0 +1,5 @@
+2026-03-22T10:00:00Z INFO startup complete
+2026-03-22T10:01:00Z INFO ingestion succeeded for tenant alpha
+2026-03-22T10:02:00Z WARN retrying stale manifest refresh
+2026-03-22T10:03:00Z ERROR unable to open invoice-7781.pdf due to denied
+

@@ -501,7 +501,7 @@ Checklist:
 - [x] Define benchmark case schema for query, run mode, and expected result references
 - [x] Define judgment schema for relevant documents, acceptable anchors, and coverage expectations
 - [x] Define machine-readable outputs for latency, cost counters, correctness, and coverage
-- [ ] Create a tiny deterministic golden corpus for local filesystem runs
+- [x] Create a tiny deterministic golden corpus for local filesystem runs
 - [ ] Add 5-10 golden scenarios covering exact match, path filter, unsupported file, and partial coverage cases
 - [ ] Build a minimal local harness that can compare revisions on the golden corpus
 - [ ] Wire the benchmark scaffold into fast local/CI execution

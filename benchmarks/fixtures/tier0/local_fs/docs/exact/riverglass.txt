@@ -1,0 +1,6 @@
+Project Riverglass launch packet
+
+The unique verification token for this corpus is riverglass.
+Only this file contains the exact token riverglass.
+Agents should be able to find it with a simple literal search.
+
