@@ -21,6 +21,7 @@ Net-RGA is a provider-agnostic document search CLI that aims to preserve a grep-
 | Search backends | Optional pluggable capability, not a v0 requirement |
 | Local runtime config | `rc`-style local config for corpora, credentials references, defaults, and backend bindings |
 | Results policy | Anchor-native internals with grep-like output and explicit coverage reporting |
+| Core lexical engine policy | Reuse ripgrep crates/tools for traversal, matching, and rendering where practical instead of reimplementing grep internals |
 
 ## Problem Framing
 
@@ -77,6 +78,7 @@ For non-code corpora, the engine should behave more like a document search syste
 - Keep lexical verification as the source of truth even when candidate retrieval comes from an index or backend.
 - Snapshot-backed local reads are useful, but live freshness must remain architecturally first-class.
 - Preserve future paths for hosted indexing and semantic retrieval without shaping v0 around them.
+- Prefer proven ripgrep/rga building blocks for commodity search behavior, and reserve custom code for cloud/document-specific orchestration.
 
 ## Desired User Outputs
 
@@ -136,6 +138,24 @@ The system should enable these concrete outcomes in v0:
 
 ## System Architecture
 
+### Ripgrep/rga reuse boundary
+
+Net-RGA should not treat grep internals as a greenfield problem. The project should reuse existing search components wherever possible:
+
+- use ripgrep-adjacent crates such as `ignore`, `globset`, and the `grep-*` family for local traversal, filtering, lexical matching, and grep-like rendering when those fit the execution path
+- use `rga`-style preprocessing or external extractor tools where they are the pragmatic way to turn provider bytes into canonical searchable text
+- avoid custom regex engines, custom line scanners, custom ignore walkers, and custom snippet selection logic unless the cloud/document problem truly requires it
+
+The custom part of Net-RGA should stay focused on:
+
+- provider adapters and capability modeling
+- manifest/snapshot management
+- fetch planning and coverage accounting
+- canonical extraction and anchor mapping
+- bundle portability and cache/index lifecycle
+
+This boundary should guide refactors as the implementation matures: if a code path is primarily “grep work” rather than “cloud/document orchestration,” it should be a candidate for replacement with ripgrep crates or a delegated tool.
+
 ### High-level overview
 
 Net-RGA is a hybrid local/remote document search engine:
@@ -155,11 +175,11 @@ Net-RGA is a hybrid local/remote document search engine:
 | Provider adapter | Normalize local and remote content access | Corpus config, auth, prefixes, document ids | Namespace pages, metadata, byte streams, resolved targets | Corpus config | Local filesystem and S3 support required list/stat/read/resolve with surfaced provider errors |
 | Manifest/catalog | Canonical local state for namespace and sync health | Provider output, sync checkpoints, extraction/index status | Queryable document metadata and local state | Provider adapter | Stores identity, metadata, tombstones, sync markers, extraction/index state, and failure status |
 | Extraction/normalization | Convert provider bytes into canonical document IR | Metadata, sniffed bytes, object stream | Normalized text, anchors, snippets, extraction metadata | Provider adapter | Supports plain text, compressed text, PDF, and Office docs through reusable components |
-| Query planner | Convert a search request into an execution plan | User query, globs, filters, manifest, optional backend hints | Candidate set and execution strategy | Manifest, optional search backend | Can prune by path/type/size/time and choose manifest-only, backend-assisted, or fetch/verify paths |
+| Query planner | Convert a search request into an execution plan | User query, globs, filters, manifest, optional backend hints | Candidate set and execution strategy | Manifest, optional search backend, ripgrep-style filter primitives | Can prune by path/type/size/time and choose manifest-only, backend-assisted, or fetch/verify paths |
 | Search backend | Optionally accelerate lexical or future semantic candidate selection | Canonical document ids, normalized text, query constraints | Candidate documents/anchors/snippets | Extraction, manifest | Optional and removable; absence does not prevent search |
-| Fetch/verify engine | Retrieve content and prove lexical matches | Candidate list, provider adapter, extraction strategy | Verified matches and coverage counters | Provider adapter, planner, extraction | Can verify text matches against source content and account for failures and unsupported objects |
+| Fetch/verify engine | Retrieve content and prove lexical matches | Candidate list, provider adapter, extraction strategy | Verified matches and coverage counters | Provider adapter, planner, extraction, ripgrep-style matcher/searcher primitives | Can verify text matches against source content and account for failures and unsupported objects |
 | Bundle exporter/importer | Move prepared corpus state across environments | Manifest, optional index/cache, metadata | Versioned portable bundle | Manifest, search backend artifacts, cache | Fresh environment can import a bundle and search immediately without mandatory rebuild |
-| Output/reporting | Present match results and coverage truthfully | Verified matches, anchors, snippets, coverage stats, errors | Text output, JSON summary, exit status | Fetch/verify engine | Emits stable machine-readable coverage data and differentiates complete vs partial search |
+| Output/reporting | Present match results and coverage truthfully | Verified matches, anchors, snippets, coverage stats, errors | Text output, JSON summary, exit status | Fetch/verify engine, ripgrep-style rendering primitives where practical | Emits stable machine-readable coverage data and differentiates complete vs partial search |
 
 ### Dependency chart
 
@@ -793,6 +813,7 @@ The full benchmark suite remains later work. The project should not block on bui
 - CLI tests covering command behavior and JSON shape stability
 - Performance sanity checks for sync throughput and time-to-first-match
 - Golden benchmark runs from the benchmark scaffold for exact correctness and early latency/cost baselines
+- Microbenchmarks and benchmark reports that split traversal/filtering cost from fetch/extraction/verification cost
 
 ### Required scenarios
 
@@ -807,6 +828,9 @@ The full benchmark suite remains later work. The project should not block on bui
 - search over supported extracted documents
 - search over unsupported media formats
 - export/import into a clean environment
+- many small documents vs a few very large documents
+- fixed-string, regex, case-insensitive, and Unicode-heavy lexical queries
+- warm-manifest/warm-cache runs versus cold-manifest/cold-fetch runs
 
 ### Validation bar
 
@@ -837,6 +861,12 @@ Decision: reuse proven adapters and keep unsupported formats explicit rather tha
 Risk: planner-only search may feel slow on document-heavy corpora.
 
 Decision: deliver planner plus verification first, then add optional lexical index as the main accelerator.
+
+### Reinventing grep internals
+
+Risk: custom search loops, walkers, and rendering logic drift away from proven ripgrep behavior and waste effort on commodity problems.
+
+Decision: default to ripgrep crates or delegated tools for traversal, lexical matching, and grep-like formatting whenever the path is not provider-specific.
 
 ### Connector abstraction drift
 
