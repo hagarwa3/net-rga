@@ -1,21 +1,31 @@
-use serde::{Deserialize, Serialize};
-
 use crate::contracts::{ContractError, ExtractedDocument, Extractor};
-use crate::domain::{Anchor, DocumentMeta};
+use crate::domain::{CanonicalChunk, CanonicalContentKind, CanonicalDocument, DocumentMeta};
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct CanonicalDocument {
-    pub text: String,
-    pub anchors: Vec<Anchor>,
-    pub warnings: Vec<String>,
-}
-
-impl From<ExtractedDocument> for CanonicalDocument {
-    fn from(value: ExtractedDocument) -> Self {
+impl CanonicalDocument {
+    pub fn from_extracted(
+        meta: &DocumentMeta,
+        content_kind: CanonicalContentKind,
+        value: ExtractedDocument,
+    ) -> Self {
         Self {
+            document_id: meta.id.clone(),
+            locator: meta.locator.clone(),
+            content_kind,
             text: value.text,
-            anchors: value.anchors,
-            warnings: value.warnings.into_iter().map(|warning| warning.message).collect(),
+            chunks: value
+                .chunks
+                .into_iter()
+                .map(|chunk| CanonicalChunk {
+                    anchor_ref: chunk.anchor.stable_ref(),
+                    anchor: chunk.anchor,
+                    text: chunk.text,
+                })
+                .collect(),
+            warnings: value
+                .warnings
+                .into_iter()
+                .map(|warning| warning.message)
+                .collect(),
         }
     }
 }

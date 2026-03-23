@@ -12,17 +12,19 @@ pub use config::{
     AppConfig, BackendBinding, CorpusConfig, ProviderConfig, StateLayout, DEFAULT_STATE_DIR_NAME,
 };
 pub use contracts::{
-    ByteRange, ContractError, DeltaCapability, DeltaEvent, DeltaPage, ExtractedDocument,
+    ByteRange, ContractError, DeltaCapability, DeltaEvent, DeltaPage, ExtractedChunk,
+    ExtractedDocument,
     ExtractionWarning, Extractor, ListPage, OpenUrlCapability, PermissionEntry,
     PermissionsCapability, Provider, ProviderSearchCapability, ReadPayload, ResolvedDocument,
     SearchBackend, SearchCandidate, SearchQuerySpec,
 };
 pub use domain::{
-    Anchor, AnchorKind, AnchorLocator, CorpusDescriptor, CorpusId, CoverageCounts, CoverageStatus,
-    DocumentId, DocumentLocator, DocumentMeta, ProviderKind, SearchMatch, SearchOutputFormat,
-    SearchRequest, SearchResponse, SearchSummary,
+    Anchor, AnchorKind, AnchorLocator, AnchorParseError, CanonicalChunk, CanonicalContentKind,
+    CanonicalDocument, CorpusDescriptor, CorpusId, CoverageCounts, CoverageStatus, DocumentId,
+    DocumentLocator, DocumentMeta, ProviderKind, SearchMatch, SearchOutputFormat, SearchRequest,
+    SearchResponse, SearchSummary,
 };
-pub use extraction::{CanonicalDocument, ExtractionPlan, ExtractorRegistry};
+pub use extraction::{ExtractionPlan, ExtractorRegistry};
 pub use providers::{LocalFsProvider, S3ConnectionConfig, S3Provider};
 pub use runtime::{ConfigStore, RuntimeError, RuntimePaths};
 pub use search_engine::{SearchEngineError, execute_search, filter_manifest_documents, rank_documents};

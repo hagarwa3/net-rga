@@ -85,9 +85,15 @@ pub struct ExtractionWarning {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExtractedChunk {
+    pub anchor: Anchor,
+    pub text: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExtractedDocument {
     pub text: String,
-    pub anchors: Vec<Anchor>,
+    pub chunks: Vec<ExtractedChunk>,
     pub warnings: Vec<ExtractionWarning>,
     pub unsupported_reason: Option<String>,
 }
@@ -150,4 +156,3 @@ mod tests {
         assert!(query.path_globs.is_empty());
     }
 }
-
