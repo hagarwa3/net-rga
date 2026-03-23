@@ -241,6 +241,7 @@ mod tests {
     use std::env;
     use std::fs;
     use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use crate::config::{CorpusConfig, ProviderConfig};
@@ -252,6 +253,8 @@ mod tests {
         BUNDLE_SCHEMA_VERSION, BundleManifest, BundlePayload, import_corpus_bundle, read_bundle,
         write_bundle,
     };
+
+    static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
     #[test]
     fn bundle_manifest_tracks_optional_artifacts() {
@@ -420,8 +423,9 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or_default();
+        let counter = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
         env::temp_dir()
             .join("net-rga-bundle-tests")
-            .join(format!("bundle-{nanos}"))
+            .join(format!("bundle-{}-{nanos}-{counter}", std::process::id()))
     }
 }

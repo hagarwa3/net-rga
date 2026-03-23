@@ -2,6 +2,7 @@ use std::fs;
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -116,6 +117,7 @@ pub fn temp_dir(prefix: &str) -> PathBuf {
     std::env::temp_dir().join(prefix).join(unique_suffix())
 }
 
+#[allow(dead_code)]
 pub fn write_fixture(root: &Path, relative: &str, content: &str) {
     let path = root.join(relative);
     if let Some(parent) = path.parent() {
@@ -142,8 +144,11 @@ fn free_port() -> u16 {
 }
 
 fn unique_suffix() -> String {
-    SystemTime::now()
+    static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+    let counter = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_nanos().to_string())
-        .unwrap_or_else(|_| "fallback".to_owned())
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    format!("{}-{nanos}-{counter}", std::process::id())
 }

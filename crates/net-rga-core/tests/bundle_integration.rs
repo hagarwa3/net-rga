@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use net_rga_core::{
@@ -116,11 +117,14 @@ fn bundle_restore_bootstraps_clean_environment_with_search_ready_state() {
 }
 
 fn temp_dir(prefix: &str) -> PathBuf {
+    static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
     let suffix = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_nanos().to_string())
-        .unwrap_or_else(|_| "fallback".to_owned());
-    std::env::temp_dir().join(prefix).join(suffix)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    let counter = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    std::env::temp_dir().join(prefix).join(format!("{suffix}"))
+        .join(format!("{}-{counter}", std::process::id()))
 }
 
 fn write_fixture(root: &Path, relative: &str, content: &str) {

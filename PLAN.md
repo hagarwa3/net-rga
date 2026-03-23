@@ -757,7 +757,7 @@ Open risks:
 Checklist:
 
 - [x] Add unit tests for planner, manifest reconciliation, coverage accounting, and bundle metadata
-- [ ] Add integration tests against local filesystem and S3-compatible storage
+- [x] Add integration tests against local filesystem and S3-compatible storage
 - [ ] Add CLI snapshot tests for text and JSON output
 - [ ] Expand the benchmark scaffold into mixed-format, provider-matrix, and freshness benchmark runs
 - [ ] Refresh `README.md` once implementation exists

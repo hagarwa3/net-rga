@@ -225,6 +225,7 @@ mod tests {
     use std::env;
     use std::fs;
     use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use crate::domain::{
@@ -234,14 +235,17 @@ mod tests {
 
     use super::{INDEX_SCHEMA_VERSION, IndexUpdateStrategy, LexicalIndex};
 
+    static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
     fn temp_index_path() -> PathBuf {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or_default();
+        let counter = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
         env::temp_dir()
             .join("net-rga-index-tests")
-            .join(format!("index-{nanos}.db"))
+            .join(format!("index-{}-{nanos}-{counter}.db", std::process::id()))
     }
 
     #[test]
