@@ -575,7 +575,7 @@ Open risks:
 Checklist:
 
 - [x] Create manifest schema for corpora, objects, sync checkpoints, tombstones, and failure records
-- [ ] Add migration runner for `manifest.db`
+- [x] Add migration runner for `manifest.db`
 - [ ] Implement corpus add/list/remove commands
 - [ ] Implement local filesystem provider
 - [ ] Implement S3 connector config and auth resolution

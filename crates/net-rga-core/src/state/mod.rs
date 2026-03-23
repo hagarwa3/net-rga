@@ -1,3 +1,7 @@
+mod sqlite;
+
+pub use sqlite::{ManifestDb, ManifestError, apply_manifest_migrations, open_manifest_db};
+
 pub const MANIFEST_SCHEMA_V1: &str = include_str!("schema.sql");
 
 #[cfg(test)]
@@ -17,4 +21,3 @@ mod tests {
         }
     }
 }
-

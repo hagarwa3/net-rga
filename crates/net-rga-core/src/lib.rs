@@ -17,3 +17,4 @@ pub use domain::{
     DocumentId, DocumentLocator, DocumentMeta, ProviderKind, SearchMatch, SearchSummary,
 };
 pub use state::MANIFEST_SCHEMA_V1;
+pub use state::{ManifestDb, ManifestError, apply_manifest_migrations, open_manifest_db};
