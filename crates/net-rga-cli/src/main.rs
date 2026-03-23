@@ -1,4 +1,10 @@
+mod shell;
+
+use clap::Parser;
+use shell::{Cli, run};
+
 fn main() {
-    let _ = net_rga_core::CorpusId("bootstrap".to_owned());
-    println!("net-rga workspace bootstrapped");
+    let cli = Cli::parse();
+    println!("{}", run(cli));
 }
+

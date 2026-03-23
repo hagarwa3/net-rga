@@ -13,6 +13,7 @@ rust-version = "1.94"
 
 [workspace.dependencies]
 anyhow = "1.0.100"
+clap = { version = "4.5.49", features = ["derive"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
 thiserror = "2.0.17"
@@ -26,4 +27,3 @@ dbg_macro = "deny"
 todo = "deny"
 unwrap_used = "deny"
 expect_used = "deny"
-

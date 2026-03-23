@@ -10,8 +10,8 @@ name = "net-rga"
 path = "src/main.rs"
 
 [dependencies]
+clap.workspace = true
 net-rga-core = { path = "../net-rga-core" }
 
 [lints]
 workspace = true
-
