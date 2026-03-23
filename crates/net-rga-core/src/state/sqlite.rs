@@ -5,7 +5,7 @@ use rusqlite::{Connection, OptionalExtension};
 use thiserror::Error;
 
 use crate::config::CorpusConfig;
-use crate::domain::DocumentMeta;
+use crate::domain::{DocumentId, DocumentLocator, DocumentMeta};
 use crate::state::MANIFEST_SCHEMA_V1;
 
 const MANIFEST_SCHEMA_VERSION: u32 = 1;
@@ -275,6 +275,32 @@ impl ManifestDb {
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(error) => Err(ManifestError::Sqlite(error)),
         }
+    }
+
+    pub fn list_documents(&self, corpus_id: &str) -> Result<Vec<DocumentMeta>, ManifestError> {
+        let mut statement = self.connection.prepare(
+            "SELECT document_id, path, extension, content_type, version, size_bytes, modified_at
+             FROM documents
+             WHERE corpus_id = ?1
+             ORDER BY path ASC",
+        )?;
+        let rows = statement.query_map([corpus_id], |row| {
+            Ok(DocumentMeta {
+                id: DocumentId(row.get(0)?),
+                locator: DocumentLocator { path: row.get(1)? },
+                extension: row.get(2)?,
+                content_type: row.get(3)?,
+                version: row.get(4)?,
+                size_bytes: row.get(5)?,
+                modified_at: row.get(6)?,
+            })
+        })?;
+
+        let mut documents = Vec::new();
+        for row in rows {
+            documents.push(row?);
+        }
+        Ok(documents)
     }
 }
 
@@ -587,6 +613,52 @@ mod tests {
                     .as_deref(),
                 Some("permission_denied")
             );
+        }
+        fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn manifest_db_lists_documents_for_a_corpus() {
+        let path = temp_manifest_path();
+        {
+            let manifest =
+                ManifestDb::open(&path).unwrap_or_else(|error| panic!("manifest should open: {error}"));
+            let corpus = CorpusConfig {
+                id: "local".to_owned(),
+                display_name: Some("Local".to_owned()),
+                provider: ProviderConfig::LocalFs {
+                    root: PathBuf::from("/tmp/docs"),
+                },
+                include_globs: Vec::new(),
+                exclude_globs: Vec::new(),
+                backend: None,
+            };
+            manifest
+                .upsert_corpus(&corpus, "local_fs", "/tmp/docs", "id = 'local'", "1000")
+                .unwrap_or_else(|error| panic!("corpus should persist: {error}"));
+            manifest
+                .upsert_document(
+                    "local",
+                    &DocumentMeta {
+                        id: DocumentId("docs/report.txt".to_owned()),
+                        locator: DocumentLocator {
+                            path: "docs/report.txt".to_owned(),
+                        },
+                        extension: Some("txt".to_owned()),
+                        content_type: Some("text/plain".to_owned()),
+                        version: Some("v1".to_owned()),
+                        size_bytes: 10,
+                        modified_at: Some("1000".to_owned()),
+                    },
+                    "1000",
+                )
+                .unwrap_or_else(|error| panic!("document should upsert: {error}"));
+
+            let documents = manifest
+                .list_documents("local")
+                .unwrap_or_else(|error| panic!("documents should list: {error}"));
+            assert_eq!(documents.len(), 1);
+            assert_eq!(documents[0].locator.path, "docs/report.txt");
         }
         fs::remove_file(path).ok();
     }

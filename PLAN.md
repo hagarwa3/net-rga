@@ -649,7 +649,7 @@ Open risks:
 Checklist:
 
 - [x] Define search request model and output schema
-- [ ] Implement manifest-side filtering for globs and metadata predicates
+- [x] Implement manifest-side filtering for globs and metadata predicates
 - [ ] Implement candidate ranking for small, recent, and likely-relevant objects
 - [ ] Implement remote fetch and text verification path
 - [ ] Implement grep-like rendering over anchor-backed internal results
