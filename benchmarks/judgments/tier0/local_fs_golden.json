@@ -1,0 +1,230 @@
+{
+  "schema_version": "1.0",
+  "judgment_set_id": "tier0-local-fs-golden",
+  "corpus_id": "tier0.local_fs",
+  "cases": [
+    {
+      "case_id": "exact-riverglass",
+      "coverage_expectation": {
+        "status": "complete_required"
+      },
+      "minimum_expected_matches": 1,
+      "relevant_results": [
+        {
+          "document_id": "docs/exact/riverglass.txt",
+          "relevance_grade": 3,
+          "acceptable_anchors": [
+            {
+              "anchor_kind": "line_span",
+              "locator": {
+                "path": "docs/exact/riverglass.txt",
+                "line_start": 3,
+                "line_end": 4
+              },
+              "tolerance": "same_container"
+            }
+          ],
+          "preferred_anchor": {
+            "anchor_kind": "line_span",
+            "locator": {
+              "path": "docs/exact/riverglass.txt",
+              "line_start": 3,
+              "line_end": 3
+            },
+            "tolerance": "exact"
+          },
+          "snippet_expectations": [
+            {
+              "must_include_terms": [
+                "riverglass"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "report-orchid-path",
+      "coverage_expectation": {
+        "status": "complete_required"
+      },
+      "minimum_expected_matches": 1,
+      "relevant_results": [
+        {
+          "document_id": "docs/reports/q1-summary.md",
+          "relevance_grade": 3,
+          "acceptable_anchors": [
+            {
+              "anchor_kind": "line_span",
+              "locator": {
+                "path": "docs/reports/q1-summary.md",
+                "line_start": 3,
+                "line_end": 3
+              },
+              "tolerance": "exact"
+            }
+          ],
+          "preferred_anchor": {
+            "anchor_kind": "line_span",
+            "locator": {
+              "path": "docs/reports/q1-summary.md",
+              "line_start": 3,
+              "line_end": 3
+            },
+            "tolerance": "exact"
+          },
+          "snippet_expectations": [
+            {
+              "preferred_phrase": "Project Orchid launched on schedule."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "log-tenant-alpha-regex",
+      "coverage_expectation": {
+        "status": "complete_required"
+      },
+      "minimum_expected_matches": 1,
+      "relevant_results": [
+        {
+          "document_id": "docs/logs/app.log",
+          "relevance_grade": 3,
+          "acceptable_anchors": [
+            {
+              "anchor_kind": "line_span",
+              "locator": {
+                "path": "docs/logs/app.log",
+                "line_start": 2,
+                "line_end": 2
+              },
+              "tolerance": "exact"
+            }
+          ],
+          "preferred_anchor": {
+            "anchor_kind": "line_span",
+            "locator": {
+              "path": "docs/logs/app.log",
+              "line_start": 2,
+              "line_end": 2
+            },
+            "tolerance": "exact"
+          },
+          "snippet_expectations": [
+            {
+              "must_include_terms": [
+                "tenant",
+                "alpha"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "notes-orion-path",
+      "coverage_expectation": {
+        "status": "complete_required"
+      },
+      "minimum_expected_matches": 1,
+      "relevant_results": [
+        {
+          "document_id": "docs/notes/archive/todo.txt",
+          "relevance_grade": 3,
+          "acceptable_anchors": [
+            {
+              "anchor_kind": "line_span",
+              "locator": {
+                "path": "docs/notes/archive/todo.txt",
+                "line_start": 3,
+                "line_end": 3
+              },
+              "tolerance": "exact"
+            }
+          ],
+          "preferred_anchor": {
+            "anchor_kind": "line_span",
+            "locator": {
+              "path": "docs/notes/archive/todo.txt",
+              "line_start": 3,
+              "line_end": 3
+            },
+            "tolerance": "exact"
+          },
+          "snippet_expectations": [
+            {
+              "preferred_phrase": "rename the Orion checklist after legal review"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "spreadsheet-operations-row",
+      "coverage_expectation": {
+        "status": "complete_required"
+      },
+      "minimum_expected_matches": 1,
+      "relevant_results": [
+        {
+          "document_id": "docs/spreadsheets/budget.csv",
+          "relevance_grade": 3,
+          "acceptable_anchors": [
+            {
+              "anchor_kind": "line_span",
+              "locator": {
+                "path": "docs/spreadsheets/budget.csv",
+                "line_start": 4,
+                "line_end": 4
+              },
+              "tolerance": "exact"
+            }
+          ],
+          "preferred_anchor": {
+            "anchor_kind": "line_span",
+            "locator": {
+              "path": "docs/spreadsheets/budget.csv",
+              "line_start": 4,
+              "line_end": 4
+            },
+            "tolerance": "exact"
+          },
+          "snippet_expectations": [
+            {
+              "must_include_terms": [
+                "operations",
+                "110000"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "unsupported-media-partial",
+      "coverage_expectation": {
+        "status": "partial_required",
+        "allowed_partial_reasons": [
+          "unsupported"
+        ]
+      },
+      "minimum_expected_matches": 0,
+      "relevant_results": [],
+      "notes": "The token exists only in an unsupported media placeholder. The search must not return a verified false positive and must report partial coverage."
+    },
+    {
+      "case_id": "denied-private-partial",
+      "coverage_expectation": {
+        "status": "partial_required",
+        "allowed_partial_reasons": [
+          "denied"
+        ]
+      },
+      "minimum_expected_matches": 0,
+      "relevant_results": [],
+      "notes": "The underlying file contains a relevant token, but the benchmark mutation revokes read access before query execution."
+    }
+  ]
+}
+

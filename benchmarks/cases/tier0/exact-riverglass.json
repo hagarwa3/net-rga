@@ -1,0 +1,27 @@
+{
+  "schema_version": "1.0",
+  "case_id": "exact-riverglass",
+  "suite_id": "tier0-golden",
+  "tier": "tier0",
+  "corpus_id": "tier0.local_fs",
+  "title": "Exact literal match in a unique text file",
+  "description": "Search for the unique verification token in the Tier 0 local filesystem corpus.",
+  "query": {
+    "text": "riverglass",
+    "syntax": "literal",
+    "case_sensitivity": "smart",
+    "max_results": 5
+  },
+  "run_mode": {
+    "provider_mode": "local_fs",
+    "manifest_state": "warm",
+    "content_cache_state": "not_applicable",
+    "backend_mode": "disabled"
+  },
+  "expected_results": {
+    "judgment_file": "benchmarks/judgments/tier0/local_fs_golden.json",
+    "judgment_case_id": "exact-riverglass",
+    "requires_complete_coverage": true
+  }
+}
+
