@@ -1,0 +1,56 @@
+{
+  "request": {
+    "corpus_id": "local",
+    "query": "riverglass",
+    "fixed_strings": false,
+    "path_globs": [],
+    "extensions": [],
+    "content_types": [],
+    "size_min": null,
+    "size_max": null,
+    "modified_after": null,
+    "modified_before": null,
+    "limit": null,
+    "output_format": "json"
+  },
+  "matches": [
+    {
+      "document_id": "docs/report.txt",
+      "anchor": {
+        "kind": "line_span",
+        "locator": {
+          "path": "docs/report.txt",
+          "page": null,
+          "slide": null,
+          "sheet": null,
+          "cell_range": null,
+          "chunk_id": null,
+          "line_start": 1,
+          "line_end": 1,
+          "byte_start": null,
+          "byte_end": null,
+          "text_start": null,
+          "text_end": null
+        }
+      },
+      "snippet": "riverglass appears here",
+      "verified": true
+    }
+  ],
+  "summary": {
+    "corpus_id": "local",
+    "query": "riverglass",
+    "total_candidates": 1,
+    "indexed_candidates": 0,
+    "fetched_candidates": 1,
+    "verified_matches": 1,
+    "coverage_status": "complete",
+    "coverage_counts": {
+      "deleted_count": 0,
+      "denied_count": 0,
+      "stale_count": 0,
+      "unsupported_count": 0,
+      "failure_count": 0
+    }
+  }
+}

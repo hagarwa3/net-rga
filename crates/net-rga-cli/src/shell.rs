@@ -382,6 +382,17 @@ mod tests {
             .join(format!("state-{}-{nanos}-{counter}", std::process::id()))
     }
 
+    fn snapshot(name: &str) -> String {
+        fs::read_to_string(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("tests")
+                .join("snapshots")
+                .join(name),
+        )
+        .map(|value| value.trim_end_matches('\n').to_owned())
+        .unwrap_or_else(|error| panic!("snapshot should load: {error}"))
+    }
+
     #[test]
     fn parses_corpus_add_subcommand() {
         let cli = Cli::parse_from([
@@ -439,10 +450,7 @@ mod tests {
         };
         let outcome = handle_search_with_paths(&paths, &request)
             .unwrap_or_else(|error| panic!("search should render: {error}"));
-        assert_eq!(
-            outcome.output,
-            "docs/report.txt:1:riverglass appears here\n-- summary: corpus=local matches=1 candidates=1 fetched=1 coverage=complete deleted=0 denied=0 stale=0 unsupported=0 failed=0"
-        );
+        assert_eq!(outcome.output, snapshot("search_text.snap"));
         assert_eq!(outcome.exit_code, 0);
 
         fs::remove_dir_all(state_root).ok();
@@ -481,11 +489,7 @@ mod tests {
         };
         let output = handle_search_with_paths(&paths, &request)
             .unwrap_or_else(|error| panic!("json search should render: {error}"));
-        let parsed: serde_json::Value =
-            serde_json::from_str(&output.output).unwrap_or_else(|error| panic!("json should parse: {error}"));
-
-        assert_eq!(parsed["summary"]["coverage_status"], "complete");
-        assert_eq!(parsed["summary"]["verified_matches"], 1);
+        assert_eq!(output.output, snapshot("search_json.snap"));
         assert_eq!(output.exit_code, 0);
 
         fs::remove_dir_all(state_root).ok();
