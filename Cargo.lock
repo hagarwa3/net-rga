@@ -1676,6 +1676,7 @@ dependencies = [
  "regex",
  "rusqlite",
  "serde",
+ "serde_json",
  "thiserror",
  "tokio",
  "toml",
