@@ -17,7 +17,8 @@ pub use contracts::{
 };
 pub use domain::{
     Anchor, AnchorKind, AnchorLocator, CorpusDescriptor, CorpusId, CoverageCounts, CoverageStatus,
-    DocumentId, DocumentLocator, DocumentMeta, ProviderKind, SearchMatch, SearchSummary,
+    DocumentId, DocumentLocator, DocumentMeta, ProviderKind, SearchMatch, SearchOutputFormat,
+    SearchRequest, SearchResponse, SearchSummary,
 };
 pub use providers::{LocalFsProvider, S3ConnectionConfig, S3Provider};
 pub use runtime::{ConfigStore, RuntimeError, RuntimePaths};

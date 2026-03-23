@@ -1,7 +1,10 @@
 use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use net_rga_core::{ConfigStore, CorpusConfig, ProviderConfig, RuntimePaths, sync_corpus};
+use net_rga_core::{
+    ConfigStore, CorpusConfig, CorpusId, ProviderConfig, RuntimePaths, SearchOutputFormat,
+    SearchRequest, sync_corpus,
+};
 
 #[derive(Debug, Parser)]
 #[command(name = "net-rga", about = "Provider-agnostic document search with grep-like affordances")]
@@ -66,6 +69,26 @@ pub struct SyncArgs {
 pub struct SearchArgs {
     pub pattern: String,
     pub corpus: String,
+    #[arg(short = 'g', long = "glob")]
+    pub path_globs: Vec<String>,
+    #[arg(long = "type")]
+    pub extensions: Vec<String>,
+    #[arg(long = "content-type")]
+    pub content_types: Vec<String>,
+    #[arg(long = "size-min")]
+    pub size_min: Option<u64>,
+    #[arg(long = "size-max")]
+    pub size_max: Option<u64>,
+    #[arg(long = "modified-after")]
+    pub modified_after: Option<String>,
+    #[arg(long = "modified-before")]
+    pub modified_before: Option<String>,
+    #[arg(long = "max-count")]
+    pub limit: Option<u32>,
+    #[arg(short = 'F', long = "fixed-strings")]
+    pub fixed_strings: bool,
+    #[arg(long = "json")]
+    pub json: bool,
 }
 
 #[derive(Debug, Args)]
@@ -98,7 +121,7 @@ pub fn run(cli: Cli) -> Result<String, String> {
             CorpusSubcommand::List => handle_corpus_list(),
         },
         Commands::Sync(args) => handle_sync(args),
-        Commands::Search(args) => Ok(format!("placeholder: search {} {}", args.pattern, args.corpus)),
+        Commands::Search(args) => handle_search(args),
         Commands::Inspect(args) => Ok(format!("placeholder: inspect {}", args.corpus)),
         Commands::Export(args) => Ok(format!("placeholder: export {} {}", args.corpus, args.bundle)),
         Commands::Import(args) => Ok(format!("placeholder: import {}", args.bundle)),
@@ -197,6 +220,35 @@ fn handle_sync_with_paths(paths: &RuntimePaths, corpus: &str) -> Result<String, 
     ))
 }
 
+fn handle_search(args: SearchArgs) -> Result<String, String> {
+    let request = build_search_request(&args);
+    Ok(format!(
+        "placeholder: search {} {} format={:?}",
+        request.query, request.corpus_id.0, request.output_format
+    ))
+}
+
+fn build_search_request(args: &SearchArgs) -> SearchRequest {
+    SearchRequest {
+        corpus_id: CorpusId(args.corpus.clone()),
+        query: args.pattern.clone(),
+        fixed_strings: args.fixed_strings,
+        path_globs: args.path_globs.clone(),
+        extensions: args.extensions.clone(),
+        content_types: args.content_types.clone(),
+        size_min: args.size_min,
+        size_max: args.size_max,
+        modified_after: args.modified_after.clone(),
+        modified_before: args.modified_before.clone(),
+        limit: args.limit,
+        output_format: if args.json {
+            SearchOutputFormat::Json
+        } else {
+            SearchOutputFormat::Text
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use clap::Parser;
@@ -206,9 +258,9 @@ mod tests {
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use net_rga_core::{ConfigStore, CorpusConfig, ProviderConfig, RuntimePaths};
+    use net_rga_core::{ConfigStore, CorpusConfig, ProviderConfig, RuntimePaths, SearchOutputFormat};
 
-    use super::{Cli, Commands, CorpusSubcommand, handle_sync_with_paths, run};
+    use super::{Cli, Commands, CorpusSubcommand, build_search_request, handle_sync_with_paths, run};
 
     fn temp_state_root() -> PathBuf {
         let nanos = SystemTime::now()
@@ -246,7 +298,47 @@ mod tests {
     fn renders_placeholder_search_output() {
         let cli = Cli::parse_from(["net-rga", "search", "riverglass", "local"]);
         let output = run(cli).unwrap_or_else(|error| panic!("search placeholder should render: {error}"));
-        assert_eq!(output, "placeholder: search riverglass local");
+        assert_eq!(output, "placeholder: search riverglass local format=Text");
+    }
+
+    #[test]
+    fn search_args_build_rich_request_model() {
+        let cli = Cli::parse_from([
+            "net-rga",
+            "search",
+            "riverglass",
+            "local",
+            "--glob",
+            "docs/**",
+            "--type",
+            "txt",
+            "--content-type",
+            "text/plain",
+            "--size-min",
+            "16",
+            "--size-max",
+            "4096",
+            "--modified-after",
+            "1000",
+            "--modified-before",
+            "2000",
+            "--max-count",
+            "3",
+            "--fixed-strings",
+            "--json",
+        ]);
+
+        let request = match cli.command {
+            Commands::Search(args) => build_search_request(&args),
+            _ => panic!("expected search command"),
+        };
+
+        assert_eq!(request.corpus_id.0, "local");
+        assert_eq!(request.path_globs, vec!["docs/**"]);
+        assert_eq!(request.extensions, vec!["txt"]);
+        assert!(request.fixed_strings);
+        assert_eq!(request.limit, Some(3));
+        assert_eq!(request.output_format, SearchOutputFormat::Json);
     }
 
     #[test]
