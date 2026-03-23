@@ -1,6 +1,9 @@
+use std::fs;
+use std::path::{Path, PathBuf};
+
 use serde::{Deserialize, Serialize};
 
-use crate::config::CorpusConfig;
+use crate::config::{CorpusConfig, StateLayout};
 
 pub const BUNDLE_SCHEMA_VERSION: &str = "1";
 
@@ -72,15 +75,97 @@ pub enum BundleError {
     UnsupportedSchema(String),
     #[error("invalid bundle manifest: {0}")]
     InvalidManifest(String),
+    #[error("io error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("json error: {0}")]
+    Json(#[from] serde_json::Error),
+    #[error("toml serialization error: {0}")]
+    SerializeToml(#[from] toml::ser::Error),
+    #[error("toml deserialization error: {0}")]
+    DeserializeToml(#[from] toml::de::Error),
+}
+
+pub fn write_bundle(
+    bundle_root: &Path,
+    payload: &BundlePayload,
+    layout: &StateLayout,
+) -> Result<(), BundleError> {
+    payload.manifest.validate()?;
+    fs::create_dir_all(bundle_root)?;
+
+    let bundle_manifest_path = bundle_root.join("bundle.json");
+    fs::write(
+        bundle_manifest_path,
+        serde_json::to_string_pretty(&payload.manifest)?,
+    )?;
+
+    let corpus_config_path = bundle_root.join(&payload.manifest.artifacts.corpus_config);
+    fs::write(corpus_config_path, toml::to_string_pretty(&payload.corpus_config)?)?;
+
+    let manifest_target = bundle_root.join(&payload.manifest.artifacts.manifest_db);
+    copy_file(&layout.manifest_db, &manifest_target)?;
+
+    if let Some(index_dir) = payload.manifest.artifacts.index_dir.as_deref() {
+        copy_dir_recursive(&layout.index_dir, &bundle_root.join(index_dir))?;
+    }
+    if let Some(cache_dir) = payload.manifest.artifacts.cache_dir.as_deref() {
+        copy_dir_recursive(&layout.cache_dir, &bundle_root.join(cache_dir))?;
+    }
+    Ok(())
+}
+
+pub fn read_bundle(bundle_root: &Path) -> Result<BundlePayload, BundleError> {
+    let manifest_path = bundle_root.join("bundle.json");
+    let manifest: BundleManifest = serde_json::from_str(&fs::read_to_string(manifest_path)?)?;
+    manifest.validate()?;
+    let corpus_config_path = bundle_root.join(&manifest.artifacts.corpus_config);
+    let corpus_config: CorpusConfig = toml::from_str(&fs::read_to_string(corpus_config_path)?)?;
+    Ok(BundlePayload {
+        manifest,
+        corpus_config,
+    })
+}
+
+pub fn bundle_artifact_path(bundle_root: &Path, relative_path: &str) -> PathBuf {
+    bundle_root.join(relative_path)
+}
+
+fn copy_file(source: &Path, target: &Path) -> Result<(), BundleError> {
+    let parent = target.parent().ok_or_else(|| {
+        BundleError::InvalidManifest(format!("invalid target path: {}", target.display()))
+    })?;
+    fs::create_dir_all(parent)?;
+    fs::copy(source, target)?;
+    Ok(())
+}
+
+fn copy_dir_recursive(source: &Path, target: &Path) -> Result<(), BundleError> {
+    fs::create_dir_all(target)?;
+    for entry in fs::read_dir(source)? {
+        let entry = entry?;
+        let source_path = entry.path();
+        let target_path = target.join(entry.file_name());
+        let file_type = entry.file_type()?;
+        if file_type.is_dir() {
+            copy_dir_recursive(&source_path, &target_path)?;
+        } else {
+            copy_file(&source_path, &target_path)?;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
+    use std::env;
+    use std::fs;
     use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     use crate::config::{CorpusConfig, ProviderConfig};
+    use crate::config::StateLayout;
 
-    use super::{BUNDLE_SCHEMA_VERSION, BundleManifest};
+    use super::{BUNDLE_SCHEMA_VERSION, BundleManifest, BundlePayload, read_bundle, write_bundle};
 
     #[test]
     fn bundle_manifest_tracks_optional_artifacts() {
@@ -122,5 +207,61 @@ mod tests {
         };
 
         assert!(invalid.validate().is_err());
+    }
+
+    #[test]
+    fn bundle_write_and_read_round_trip_manifest_and_config() {
+        let root = temp_root();
+        let bundle_root = root.join("bundle");
+        let layout = StateLayout {
+            state_root: root.clone(),
+            corpus_root: root.join("corpora/local"),
+            manifest_db: root.join("corpora/local/manifest.db"),
+            index_dir: root.join("corpora/local/index"),
+            cache_dir: root.join("corpora/local/cache"),
+        };
+        fs::create_dir_all(&layout.index_dir)
+            .unwrap_or_else(|error| panic!("index dir should create: {error}"));
+        fs::write(&layout.manifest_db, "manifest-bytes")
+            .unwrap_or_else(|error| panic!("manifest should write: {error}"));
+        fs::write(layout.index_dir.join("index.db"), "index-bytes")
+            .unwrap_or_else(|error| panic!("index should write: {error}"));
+
+        let corpus = CorpusConfig {
+            id: "local".to_owned(),
+            display_name: Some("Local".to_owned()),
+            provider: ProviderConfig::LocalFs {
+                root: PathBuf::from("/data"),
+            },
+            include_globs: Vec::new(),
+            exclude_globs: Vec::new(),
+            backend: None,
+        };
+        let payload = BundlePayload {
+            manifest: BundleManifest::for_corpus(&corpus, true, false),
+            corpus_config: corpus,
+        };
+
+        write_bundle(&bundle_root, &payload, &layout)
+            .unwrap_or_else(|error| panic!("bundle should write: {error}"));
+        let loaded = read_bundle(&bundle_root)
+            .unwrap_or_else(|error| panic!("bundle should read: {error}"));
+
+        assert_eq!(loaded.manifest, payload.manifest);
+        assert_eq!(loaded.corpus_config.id, "local");
+        assert!(bundle_root.join("manifest.db").exists());
+        assert!(bundle_root.join("index/index.db").exists());
+
+        fs::remove_dir_all(root).ok();
+    }
+
+    fn temp_root() -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or_default();
+        env::temp_dir()
+            .join("net-rga-bundle-tests")
+            .join(format!("bundle-{nanos}"))
     }
 }
