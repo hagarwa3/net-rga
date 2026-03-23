@@ -7,6 +7,7 @@ use crate::domain::{
     Anchor, AnchorKind, AnchorLocator, CanonicalChunk, CanonicalContentKind, CanonicalDocument,
     DocumentMeta,
 };
+use crate::extractor_adapters::default_extractors;
 
 impl CanonicalDocument {
     pub fn from_extracted(
@@ -84,13 +85,21 @@ impl ExtractorRegistry {
     }
 
     pub fn extract(meta: &DocumentMeta, bytes: &[u8], extractors: &[Box<dyn Extractor>]) -> Result<CanonicalDocument, ContractError> {
+        let fallback_extractors;
+        let extractor_slice = if extractors.is_empty() {
+            fallback_extractors = default_extractors();
+            fallback_extractors.as_slice()
+        } else {
+            extractors
+        };
+
         match Self::sniff(meta, bytes) {
             ExtractionPlan::PlainText => extract_plain_text(meta, bytes, CanonicalContentKind::Text),
             ExtractionPlan::GzipText => extract_gzip_text(meta, bytes),
-            ExtractionPlan::Pdf => extract_with(meta, bytes, extractors, CanonicalContentKind::Pdf),
-            ExtractionPlan::Docx => extract_with(meta, bytes, extractors, CanonicalContentKind::Document),
-            ExtractionPlan::Pptx => extract_with(meta, bytes, extractors, CanonicalContentKind::Presentation),
-            ExtractionPlan::Xlsx => extract_with(meta, bytes, extractors, CanonicalContentKind::Spreadsheet),
+            ExtractionPlan::Pdf => extract_with(meta, bytes, extractor_slice, CanonicalContentKind::Pdf),
+            ExtractionPlan::Docx => extract_with(meta, bytes, extractor_slice, CanonicalContentKind::Document),
+            ExtractionPlan::Pptx => extract_with(meta, bytes, extractor_slice, CanonicalContentKind::Presentation),
+            ExtractionPlan::Xlsx => extract_with(meta, bytes, extractor_slice, CanonicalContentKind::Spreadsheet),
             ExtractionPlan::Unsupported(reason) => unsupported_document(reason),
         }
     }

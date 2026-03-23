@@ -688,7 +688,7 @@ Checklist:
 - [x] Implement content sniffing and extractor dispatch
 - [x] Define canonical document IR and anchor serialization
 - [x] Implement plain-text and compressed-text extraction
-- [ ] Integrate PDF extraction adapter
+- [x] Integrate PDF extraction adapter
 - [ ] Integrate Office extraction adapter
 - [ ] Define index schema and index update strategy
 - [ ] Use index hits as planner input without bypassing final verification

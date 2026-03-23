@@ -2,6 +2,7 @@ pub mod config;
 pub mod contracts;
 pub mod domain;
 pub mod extraction;
+mod extractor_adapters;
 pub mod providers;
 pub mod runtime;
 pub mod search_engine;
@@ -25,6 +26,7 @@ pub use domain::{
     SearchResponse, SearchSummary,
 };
 pub use extraction::{ExtractionPlan, ExtractorRegistry};
+pub use extractor_adapters::PdfExtractor;
 pub use providers::{LocalFsProvider, S3ConnectionConfig, S3Provider};
 pub use runtime::{ConfigStore, RuntimeError, RuntimePaths};
 pub use search_engine::{SearchEngineError, execute_search, filter_manifest_documents, rank_documents};
