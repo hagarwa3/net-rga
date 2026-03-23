@@ -685,7 +685,7 @@ Open risks:
 
 Checklist:
 
-- [ ] Implement content sniffing and extractor dispatch
+- [x] Implement content sniffing and extractor dispatch
 - [ ] Define canonical document IR and anchor serialization
 - [ ] Implement plain-text and compressed-text extraction
 - [ ] Integrate PDF extraction adapter
