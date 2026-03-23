@@ -6,7 +6,7 @@ use crate::config::{CorpusConfig, ProviderConfig, StateLayout};
 use crate::contracts::{ContractError, Provider};
 use crate::providers::{LocalFsProvider, S3ConnectionConfig, S3Provider};
 use crate::runtime::{ConfigStore, RuntimeError, RuntimePaths};
-use crate::state::{ManifestDb, ManifestError};
+use crate::state::{DocumentUpsertStatus, ManifestDb, ManifestError};
 
 const CHECKPOINT_LIST_CURSOR: &str = "list_cursor";
 const CHECKPOINT_LAST_SYNC_STARTED_AT: &str = "last_sync_started_at";
@@ -50,6 +50,11 @@ pub struct SyncRunSummary {
     pub completed_at: String,
     pub listed_documents: u64,
     pub pages_processed: u64,
+    pub new_documents: u64,
+    pub updated_documents: u64,
+    pub deleted_documents: u64,
+    pub denied_objects: u64,
+    pub failed_objects: u64,
     pub last_cursor: Option<String>,
 }
 
@@ -95,6 +100,10 @@ fn sync_corpus_with_provider(
     let mut cursor = None;
     let mut listed_documents = 0_u64;
     let mut pages_processed = 0_u64;
+    let mut new_documents = 0_u64;
+    let mut updated_documents = 0_u64;
+    let denied_objects = 0_u64;
+    let failed_objects = 0_u64;
 
     loop {
         let page = match provider.list("", cursor.as_deref()) {
@@ -113,7 +122,11 @@ fn sync_corpus_with_provider(
             }
         };
         for document in &page.documents {
-            manifest.upsert_document(&corpus.id, document, &started_at)?;
+            match manifest.upsert_document(&corpus.id, document, &started_at)? {
+                DocumentUpsertStatus::Inserted => new_documents += 1,
+                DocumentUpsertStatus::Updated => updated_documents += 1,
+                DocumentUpsertStatus::Unchanged => {}
+            }
         }
         listed_documents += u64::try_from(page.documents.len()).unwrap_or_default();
         pages_processed += 1;
@@ -130,7 +143,8 @@ fn sync_corpus_with_provider(
     }
 
     let completed_at = timestamp_now();
-    manifest.tombstone_missing_documents(&corpus.id, &started_at, &completed_at)?;
+    let deleted_documents =
+        manifest.tombstone_missing_documents(&corpus.id, &started_at, &completed_at)?;
     manifest.upsert_sync_checkpoint(
         &corpus.id,
         SyncCheckpointName::LastSyncCompletedAt.as_str(),
@@ -144,6 +158,11 @@ fn sync_corpus_with_provider(
         completed_at,
         listed_documents,
         pages_processed,
+        new_documents,
+        updated_documents,
+        deleted_documents,
+        denied_objects,
+        failed_objects,
         last_cursor: None,
     })
 }
@@ -245,6 +264,11 @@ mod tests {
             .unwrap_or_else(|error| panic!("sync should succeed: {error}"));
         assert_eq!(summary.corpus_id, "local");
         assert!(summary.pages_processed >= 1);
+        assert_eq!(summary.new_documents, 1);
+        assert_eq!(summary.updated_documents, 0);
+        assert_eq!(summary.deleted_documents, 0);
+        assert_eq!(summary.denied_objects, 0);
+        assert_eq!(summary.failed_objects, 0);
 
         let manifest = ManifestDb::open(&state_root.join("corpora/local/manifest.db"))
             .unwrap_or_else(|error| panic!("manifest should open: {error}"));
@@ -294,7 +318,8 @@ mod tests {
 
         sync_corpus(&paths, "local").unwrap_or_else(|error| panic!("first sync should succeed: {error}"));
         fs::remove_file(report_path).unwrap_or_else(|error| panic!("fixture should delete: {error}"));
-        sync_corpus(&paths, "local").unwrap_or_else(|error| panic!("second sync should succeed: {error}"));
+        let summary = sync_corpus(&paths, "local")
+            .unwrap_or_else(|error| panic!("second sync should succeed: {error}"));
 
         let manifest = ManifestDb::open(&state_root.join("corpora/local/manifest.db"))
             .unwrap_or_else(|error| panic!("manifest should open: {error}"));
@@ -310,6 +335,7 @@ mod tests {
                 .unwrap_or_else(|error| panic!("tombstone count should query: {error}")),
             1
         );
+        assert_eq!(summary.deleted_documents, 1);
 
         fs::remove_dir_all(state_root).ok();
     }

@@ -185,8 +185,15 @@ fn handle_sync(args: SyncArgs) -> Result<String, String> {
 fn handle_sync_with_paths(paths: &RuntimePaths, corpus: &str) -> Result<String, String> {
     let summary = sync_corpus(paths, corpus).map_err(|error| error.to_string())?;
     Ok(format!(
-        "synced {}\tpages={}\tlisted={}",
-        summary.corpus_id, summary.pages_processed, summary.listed_documents
+        "synced {}\tpages={}\tlisted={}\tnew={}\tupdated={}\tdeleted={}\tdenied={}\tfailed={}",
+        summary.corpus_id,
+        summary.pages_processed,
+        summary.listed_documents,
+        summary.new_documents,
+        summary.updated_documents,
+        summary.deleted_documents,
+        summary.denied_objects,
+        summary.failed_objects
     ))
 }
 
