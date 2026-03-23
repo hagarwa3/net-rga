@@ -22,6 +22,7 @@ benchmarks/
   README.md
   schemas/
     benchmark_case.schema.json
+    benchmark_result.schema.json
     judgment.schema.json
 ```
 
@@ -34,4 +35,5 @@ benchmarks/
 
 ## Planned next schemas
 
-- `benchmark_result.schema.json`
+- tiny golden corpus inputs
+- first benchmark cases and judgments
