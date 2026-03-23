@@ -4,6 +4,7 @@ pub mod domain;
 pub mod providers;
 pub mod runtime;
 pub mod state;
+pub mod sync;
 
 pub use config::{
     AppConfig, BackendBinding, CorpusConfig, ProviderConfig, StateLayout, DEFAULT_STATE_DIR_NAME,
@@ -22,3 +23,4 @@ pub use providers::{LocalFsProvider, S3ConnectionConfig, S3Provider};
 pub use runtime::{ConfigStore, RuntimeError, RuntimePaths};
 pub use state::MANIFEST_SCHEMA_V1;
 pub use state::{ManifestDb, ManifestError, apply_manifest_migrations, open_manifest_db};
+pub use sync::{SyncCheckpointName, SyncError, SyncRunSummary, sync_corpus};

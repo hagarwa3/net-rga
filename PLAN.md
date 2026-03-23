@@ -611,7 +611,7 @@ Open risks:
 
 Checklist:
 
-- [ ] Implement sync orchestration and checkpoint persistence
+- [x] Implement sync orchestration and checkpoint persistence
 - [ ] Upsert object metadata and version markers into the manifest
 - [ ] Mark deleted objects as tombstoned when reconciliation proves absence
 - [ ] Record sync errors, permission failures, and transient failures
