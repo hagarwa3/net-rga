@@ -722,7 +722,7 @@ Open risks:
 
 Checklist:
 
-- [ ] Define `bundle.json` schema and versioning
+- [x] Define `bundle.json` schema and versioning
 - [ ] Implement bundle pack/unpack workflow
 - [ ] Preserve corpus metadata and sync state across import/export
 - [ ] Allow import without optional `index/` or `cache/`
