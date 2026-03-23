@@ -726,7 +726,7 @@ Checklist:
 - [x] Implement bundle pack/unpack workflow
 - [x] Preserve corpus metadata and sync state across import/export
 - [x] Allow import without optional `index/` or `cache/`
-- [ ] Add tests for clean-environment restore
+- [x] Add tests for clean-environment restore
 
 ### Phase 6: CLI hardening, test matrix, benchmarks, docs updates
 
