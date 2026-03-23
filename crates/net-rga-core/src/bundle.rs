@@ -169,18 +169,16 @@ pub fn import_corpus_bundle(
         &layout.manifest_db,
     )?;
 
-    if let Some(index_dir) = payload.manifest.artifacts.index_dir.as_deref() {
-        if layout.index_dir.exists() {
-            fs::remove_dir_all(&layout.index_dir)?;
-        }
-        copy_dir_recursive(&bundle_artifact_path(bundle_root, index_dir), &layout.index_dir)?;
-    }
-    if let Some(cache_dir) = payload.manifest.artifacts.cache_dir.as_deref() {
-        if layout.cache_dir.exists() {
-            fs::remove_dir_all(&layout.cache_dir)?;
-        }
-        copy_dir_recursive(&bundle_artifact_path(bundle_root, cache_dir), &layout.cache_dir)?;
-    }
+    restore_optional_directory(
+        bundle_root,
+        payload.manifest.artifacts.index_dir.as_deref(),
+        &layout.index_dir,
+    )?;
+    restore_optional_directory(
+        bundle_root,
+        payload.manifest.artifacts.cache_dir.as_deref(),
+        &layout.cache_dir,
+    )?;
 
     let store = ConfigStore::new(paths.clone());
     store.upsert_corpus(payload.corpus_config)?;
@@ -219,6 +217,25 @@ fn directory_has_entries(path: &Path) -> Result<bool, BundleError> {
     Ok(fs::read_dir(path)?.next().is_some())
 }
 
+fn restore_optional_directory(
+    bundle_root: &Path,
+    bundle_relative: Option<&str>,
+    target: &Path,
+) -> Result<(), BundleError> {
+    if target.exists() {
+        fs::remove_dir_all(target)?;
+    }
+
+    let Some(bundle_relative) = bundle_relative else {
+        return Ok(());
+    };
+    let source = bundle_artifact_path(bundle_root, bundle_relative);
+    if !source.exists() {
+        return Ok(());
+    }
+    copy_dir_recursive(&source, target)
+}
+
 #[cfg(test)]
 mod tests {
     use std::env;
@@ -229,7 +246,12 @@ mod tests {
     use crate::config::{CorpusConfig, ProviderConfig};
     use crate::config::StateLayout;
 
-    use super::{BUNDLE_SCHEMA_VERSION, BundleManifest, BundlePayload, read_bundle, write_bundle};
+    use crate::runtime::RuntimePaths;
+
+    use super::{
+        BUNDLE_SCHEMA_VERSION, BundleManifest, BundlePayload, import_corpus_bundle, read_bundle,
+        write_bundle,
+    };
 
     #[test]
     fn bundle_manifest_tracks_optional_artifacts() {
@@ -315,6 +337,60 @@ mod tests {
         assert_eq!(loaded.corpus_config.id, "local");
         assert!(bundle_root.join("manifest.db").exists());
         assert!(bundle_root.join("index/index.db").exists());
+
+        fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn import_tolerates_missing_optional_index_and_cache_directories() {
+        let root = temp_root();
+        let bundle_root = root.join("bundle");
+        let import_root = root.join("imported");
+        let layout = StateLayout {
+            state_root: root.clone(),
+            corpus_root: root.join("corpora/local"),
+            manifest_db: root.join("corpora/local/manifest.db"),
+            index_dir: root.join("corpora/local/index"),
+            cache_dir: root.join("corpora/local/cache"),
+        };
+        fs::create_dir_all(&layout.index_dir)
+            .unwrap_or_else(|error| panic!("index dir should create: {error}"));
+        fs::create_dir_all(&layout.cache_dir)
+            .unwrap_or_else(|error| panic!("cache dir should create: {error}"));
+        fs::write(&layout.manifest_db, "manifest-bytes")
+            .unwrap_or_else(|error| panic!("manifest should write: {error}"));
+        fs::write(layout.index_dir.join("index.db"), "index-bytes")
+            .unwrap_or_else(|error| panic!("index should write: {error}"));
+        fs::write(layout.cache_dir.join("entry.txt"), "cache-bytes")
+            .unwrap_or_else(|error| panic!("cache should write: {error}"));
+
+        let corpus = CorpusConfig {
+            id: "local".to_owned(),
+            display_name: Some("Local".to_owned()),
+            provider: ProviderConfig::LocalFs {
+                root: PathBuf::from("/data"),
+            },
+            include_globs: Vec::new(),
+            exclude_globs: Vec::new(),
+            backend: None,
+        };
+        let payload = BundlePayload {
+            manifest: BundleManifest::for_corpus(&corpus, true, true),
+            corpus_config: corpus,
+        };
+        write_bundle(&bundle_root, &payload, &layout)
+            .unwrap_or_else(|error| panic!("bundle should write: {error}"));
+        fs::remove_dir_all(bundle_root.join("index")).ok();
+        fs::remove_dir_all(bundle_root.join("cache")).ok();
+
+        let imported = import_corpus_bundle(&RuntimePaths::from_state_root(import_root.clone()), &bundle_root)
+            .unwrap_or_else(|error| panic!("bundle import should succeed without optional dirs: {error}"));
+
+        let imported_layout = StateLayout::for_corpus(&import_root, &crate::domain::CorpusId("local".to_owned()));
+        assert_eq!(imported.corpus.id, "local");
+        assert!(imported_layout.manifest_db.exists());
+        assert!(!imported_layout.index_dir.exists());
+        assert!(!imported_layout.cache_dir.exists());
 
         fs::remove_dir_all(root).ok();
     }
