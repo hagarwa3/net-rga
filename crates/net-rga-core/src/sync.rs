@@ -84,7 +84,7 @@ pub fn sync_corpus_config(paths: &RuntimePaths, corpus: &CorpusConfig) -> Result
         &started_at,
     )?;
 
-    let mut cursor = manifest.sync_checkpoint(&corpus.id, SyncCheckpointName::ListCursor.as_str())?;
+    let mut cursor = None;
     let mut listed_documents = 0_u64;
     let mut pages_processed = 0_u64;
 
@@ -108,6 +108,7 @@ pub fn sync_corpus_config(paths: &RuntimePaths, corpus: &CorpusConfig) -> Result
     }
 
     let completed_at = timestamp_now();
+    manifest.tombstone_missing_documents(&corpus.id, &started_at, &completed_at)?;
     manifest.upsert_sync_checkpoint(
         &corpus.id,
         SyncCheckpointName::LastSyncCompletedAt.as_str(),
@@ -156,7 +157,7 @@ fn provider_root(config: &ProviderConfig) -> String {
 fn timestamp_now() -> String {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs().to_string())
+        .map(|duration| duration.as_millis().to_string())
         .unwrap_or_else(|_| "0".to_owned())
 }
 
@@ -224,6 +225,53 @@ mod tests {
             manifest
                 .document_count("local")
                 .unwrap_or_else(|error| panic!("document count should query: {error}")),
+            1
+        );
+
+        fs::remove_dir_all(state_root).ok();
+    }
+
+    #[test]
+    fn sync_tombstones_deleted_local_documents() {
+        let state_root = temp_state_root();
+        let corpus_root = state_root.join("fixtures");
+        fs::create_dir_all(corpus_root.join("docs"))
+            .unwrap_or_else(|error| panic!("fixture dir should create: {error}"));
+        let report_path = corpus_root.join("docs/report.txt");
+        fs::write(&report_path, "riverglass")
+            .unwrap_or_else(|error| panic!("fixture should write: {error}"));
+
+        let paths = RuntimePaths::from_state_root(state_root.clone());
+        let store = ConfigStore::new(paths.clone());
+        store
+            .add_corpus(CorpusConfig {
+                id: "local".to_owned(),
+                display_name: Some("Local".to_owned()),
+                provider: ProviderConfig::LocalFs {
+                    root: corpus_root.clone(),
+                },
+                include_globs: Vec::new(),
+                exclude_globs: Vec::new(),
+                backend: None,
+            })
+            .unwrap_or_else(|error| panic!("corpus should save: {error}"));
+
+        sync_corpus(&paths, "local").unwrap_or_else(|error| panic!("first sync should succeed: {error}"));
+        fs::remove_file(report_path).unwrap_or_else(|error| panic!("fixture should delete: {error}"));
+        sync_corpus(&paths, "local").unwrap_or_else(|error| panic!("second sync should succeed: {error}"));
+
+        let manifest = ManifestDb::open(&state_root.join("corpora/local/manifest.db"))
+            .unwrap_or_else(|error| panic!("manifest should open: {error}"));
+        assert_eq!(
+            manifest
+                .document_count("local")
+                .unwrap_or_else(|error| panic!("document count should query: {error}")),
+            0
+        );
+        assert_eq!(
+            manifest
+                .tombstone_count("local")
+                .unwrap_or_else(|error| panic!("tombstone count should query: {error}")),
             1
         );
 

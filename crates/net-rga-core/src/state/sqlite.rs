@@ -175,6 +175,10 @@ impl ManifestDb {
                 last_seen_at
             ],
         )?;
+        self.connection.execute(
+            "DELETE FROM tombstones WHERE corpus_id = ?1 AND document_id = ?2",
+            rusqlite::params![corpus_id, document.id.0],
+        )?;
 
         Ok(match existing {
             None => DocumentUpsertStatus::Inserted,
@@ -194,6 +198,37 @@ impl ManifestDb {
         self.connection
             .query_row(
                 "SELECT COUNT(*) FROM documents WHERE corpus_id = ?1",
+                [corpus_id],
+                |row| row.get(0),
+            )
+            .map_err(ManifestError::Sqlite)
+    }
+
+    pub fn tombstone_missing_documents(
+        &self,
+        corpus_id: &str,
+        active_last_seen_at: &str,
+        deleted_at: &str,
+    ) -> Result<u64, ManifestError> {
+        let deleted_count = self.connection.execute(
+            "INSERT OR REPLACE INTO tombstones (corpus_id, document_id, path, version, deleted_at)
+             SELECT corpus_id, document_id, path, version, ?3
+             FROM documents
+             WHERE corpus_id = ?1 AND last_seen_at <> ?2",
+            rusqlite::params![corpus_id, active_last_seen_at, deleted_at],
+        )?;
+        self.connection.execute(
+            "DELETE FROM documents
+             WHERE corpus_id = ?1 AND last_seen_at <> ?2",
+            rusqlite::params![corpus_id, active_last_seen_at],
+        )?;
+        Ok(u64::try_from(deleted_count).unwrap_or_default())
+    }
+
+    pub fn tombstone_count(&self, corpus_id: &str) -> Result<u64, ManifestError> {
+        self.connection
+            .query_row(
+                "SELECT COUNT(*) FROM tombstones WHERE corpus_id = ?1",
                 [corpus_id],
                 |row| row.get(0),
             )
@@ -223,6 +258,7 @@ pub fn apply_manifest_migrations(connection: &Connection) -> Result<(), Manifest
 mod tests {
     use std::env;
     use std::fs;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -231,13 +267,16 @@ mod tests {
     use crate::domain::{DocumentId, DocumentLocator, DocumentMeta};
 
     fn temp_manifest_path() -> PathBuf {
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or_default();
+        let sequence = COUNTER.fetch_add(1, Ordering::Relaxed);
         env::temp_dir()
             .join("net-rga-tests")
-            .join(format!("manifest-{nanos}.db"))
+            .join(format!("manifest-{nanos}-{sequence}"))
+            .join("manifest.db")
     }
 
     #[test]
@@ -399,6 +438,64 @@ mod tests {
                 manifest
                     .document_count("local")
                     .unwrap_or_else(|error| panic!("document count should query: {error}")),
+                1
+            );
+        }
+        fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn manifest_db_tombstones_missing_documents() {
+        let path = temp_manifest_path();
+        {
+            let manifest =
+                ManifestDb::open(&path).unwrap_or_else(|error| panic!("manifest should open: {error}"));
+            let corpus = CorpusConfig {
+                id: "local".to_owned(),
+                display_name: Some("Local".to_owned()),
+                provider: ProviderConfig::LocalFs {
+                    root: PathBuf::from("/tmp/docs"),
+                },
+                include_globs: Vec::new(),
+                exclude_globs: Vec::new(),
+                backend: None,
+            };
+            manifest
+                .upsert_corpus(&corpus, "local_fs", "/tmp/docs", "id = 'local'", "1000")
+                .unwrap_or_else(|error| panic!("corpus should persist: {error}"));
+            manifest
+                .upsert_document(
+                    "local",
+                    &DocumentMeta {
+                        id: DocumentId("docs/report.txt".to_owned()),
+                        locator: DocumentLocator {
+                            path: "docs/report.txt".to_owned(),
+                        },
+                        extension: Some("txt".to_owned()),
+                        content_type: Some("text/plain".to_owned()),
+                        version: Some("v1".to_owned()),
+                        size_bytes: 10,
+                        modified_at: Some("1000".to_owned()),
+                    },
+                    "1000",
+                )
+                .unwrap_or_else(|error| panic!("document should upsert: {error}"));
+
+            let tombstoned = manifest
+                .tombstone_missing_documents("local", "2000", "2000")
+                .unwrap_or_else(|error| panic!("document should tombstone: {error}"));
+
+            assert_eq!(tombstoned, 1);
+            assert_eq!(
+                manifest
+                    .document_count("local")
+                    .unwrap_or_else(|error| panic!("document count should query: {error}")),
+                0
+            );
+            assert_eq!(
+                manifest
+                    .tombstone_count("local")
+                    .unwrap_or_else(|error| panic!("tombstone count should query: {error}")),
                 1
             );
         }
