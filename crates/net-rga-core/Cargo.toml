@@ -13,6 +13,7 @@ aws-config.workspace = true
 aws-sdk-s3.workspace = true
 flate2.workspace = true
 globset.workspace = true
+ignore.workspace = true
 pdf-extract.workspace = true
 quick-xml.workspace = true
 regex.workspace = true

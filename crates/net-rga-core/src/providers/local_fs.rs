@@ -2,6 +2,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
+use ignore::WalkBuilder;
+
 use crate::contracts::{ByteRange, ContractError, ListPage, Provider, ReadPayload, ResolvedDocument};
 use crate::domain::{DocumentId, DocumentLocator, DocumentMeta};
 
@@ -18,28 +20,38 @@ impl LocalFsProvider {
         self.root.join(&document_id.0)
     }
 
-    fn collect_files(&self, current: &Path, prefix: &str, out: &mut Vec<DocumentMeta>) -> Result<(), ContractError> {
-        for entry in fs::read_dir(current).map_err(io_error)? {
-            let entry = entry.map_err(io_error)?;
-            let path = entry.path();
-            if path.is_dir() {
-                self.collect_files(&path, prefix, out)?;
+    fn collect_files(&self, prefix: &str) -> Result<Vec<DocumentMeta>, ContractError> {
+        let mut builder = WalkBuilder::new(&self.root);
+        builder.standard_filters(false);
+        builder.hidden(false);
+        builder.git_ignore(false);
+        builder.git_global(false);
+        builder.git_exclude(false);
+
+        let mut documents = Vec::new();
+        for entry in builder.build() {
+            let entry = entry.map_err(walk_error)?;
+            let Some(file_type) = entry.file_type() else {
+                continue;
+            };
+            if !file_type.is_file() {
                 continue;
             }
-            let relative = relative_path(&path, &self.root)?;
+
+            let path = entry.path();
+            let relative = relative_path(path, &self.root)?;
             if !prefix.is_empty() && !relative.starts_with(prefix) {
                 continue;
             }
-            out.push(document_meta_from_path(&self.root, &path)?);
+            documents.push(document_meta_from_path(&self.root, path)?);
         }
-        Ok(())
+        Ok(documents)
     }
 }
 
 impl Provider for LocalFsProvider {
     fn list(&self, prefix: &str, cursor: Option<&str>) -> Result<ListPage, ContractError> {
-        let mut documents = Vec::new();
-        self.collect_files(&self.root, prefix.trim_matches('/'), &mut documents)?;
+        let mut documents = self.collect_files(prefix.trim_matches('/'))?;
         documents.sort_by(|left, right| left.locator.path.cmp(&right.locator.path));
         if let Some(cursor_value) = cursor {
             documents.retain(|document| document.locator.path.as_str() > cursor_value);
@@ -123,6 +135,14 @@ fn io_error(error: std::io::Error) -> ContractError {
     match error.kind() {
         std::io::ErrorKind::NotFound => ContractError::NotFound(error.to_string()),
         std::io::ErrorKind::PermissionDenied => ContractError::PermissionDenied(error.to_string()),
+        _ => ContractError::Io(error.to_string()),
+    }
+}
+
+fn walk_error(error: ignore::Error) -> ContractError {
+    match error.io_error().map(std::io::Error::kind) {
+        Some(std::io::ErrorKind::NotFound) => ContractError::NotFound(error.to_string()),
+        Some(std::io::ErrorKind::PermissionDenied) => ContractError::PermissionDenied(error.to_string()),
         _ => ContractError::Io(error.to_string()),
     }
 }
