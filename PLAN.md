@@ -577,7 +577,7 @@ Checklist:
 - [x] Create manifest schema for corpora, objects, sync checkpoints, tombstones, and failure records
 - [x] Add migration runner for `manifest.db`
 - [x] Implement corpus add/list/remove commands
-- [ ] Implement local filesystem provider
+- [x] Implement local filesystem provider
 - [ ] Implement S3 connector config and auth resolution
 - [ ] Implement S3 list/stat/read/resolve primitives
 - [ ] Add provider integration tests for local filesystem and an S3-compatible target
