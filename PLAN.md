@@ -19,6 +19,8 @@ Net-RGA is a provider-agnostic document search CLI that aims to preserve a grep-
 | Media handling in v0 | Images/videos are metadata-searchable only |
 | Bundle format | Versioned bundle with `manifest.db` and optional `index/` and `cache/` |
 | Search backends | Optional pluggable capability, not a v0 requirement |
+| Current local search backend | Embedded SQLite FTS5 lexical index sidecar |
+| Hosted search backend path | Future `SearchBackend` implementation; must not replace final verification |
 | Local runtime config | `rc`-style local config for corpora, credentials references, defaults, and backend bindings |
 | Results policy | Anchor-native internals with grep-like output and explicit coverage reporting |
 | Core lexical engine policy | Reuse ripgrep crates/tools for traversal, matching, and rendering where practical instead of reimplementing grep internals |
@@ -398,8 +400,10 @@ Each corpus should be representable by a stable local directory layout:
 
 ### Optional sidecars and backend artifacts
 
-- `index/` stores lexical index segments. Planned backend: `tantivy`.
+- `index/` stores lexical index artifacts. Current implementation: embedded SQLite FTS5 over canonical chunks.
 - `cache/` stores extracted text or reusable intermediate artifacts when beneficial.
+
+The next implementation step should move the embedded local index behind the `SearchBackend` seam so local and hosted backends share the same planner contract.
 
 The same bundle model should be able to grow to include portable backend artifacts later without changing the role of `manifest.db` as the canonical sync record.
 
@@ -464,7 +468,7 @@ These choices are part of the plan so implementation can start without reopening
 | S3 client | `aws-sdk-s3` | First-party Rust SDK and future auth flexibility |
 | SQLite access | `rusqlite` | Good fit for SQLite-first local state without forcing external DB assumptions |
 | Serialization/config | `serde` + `toml` or `yaml` | Straightforward local config and bundle manifest handling |
-| Lexical index | `tantivy` | Established Rust full-text index for optional local sidecar acceleration |
+| Local lexical index | SQLite `fts5` via `rusqlite` | Fast embedded sidecar and simple bundle portability for v0 |
 | Compression/text detection | Existing Rust crates plus shell-safe adapters where needed | Reuse commodity functionality |
 | PDF/Office extraction | Adapter strategy around proven libraries or tools | Avoid reimplementing document parsing |
 
@@ -690,7 +694,7 @@ Deliverables:
 - canonical document IR and anchor generation
 - plain-text and compressed-text support
 - PDF and Office extraction adapters
-- optional `tantivy` lexical index integration
+- optional local lexical index integration
 
 Acceptance criteria:
 
@@ -782,6 +786,154 @@ Checklist:
 - [x] Expand the benchmark scaffold into mixed-format, provider-matrix, and freshness benchmark runs
 - [x] Refresh `README.md` once implementation exists
 - [x] Document known limitations and deferred features
+
+### Post-v0 direction
+
+Phases `0` through `6` are complete for the current MVP. Follow-on work should proceed in the order below so the execution path stays coherent and the benchmark suite can measure the effect of each change.
+
+### Phase 7: Index lifecycle and backend abstraction
+
+Goal: turn the current embedded lexical index into an intentional subsystem with a stable backend interface.
+
+Dependencies:
+
+- Phase 4
+- Phase 6
+
+Deliverables:
+
+- explicit index lifecycle commands
+- local embedded backend wired through `SearchBackend`
+- planner/backend seam used in the live search path
+- index metadata and health surfaced in `inspect`
+
+Acceptance criteria:
+
+- A corpus can build, rebuild, clear, and inspect its local index without relying on opportunistic query-time updates
+- Search uses the `SearchBackend` abstraction instead of reaching directly into SQLite index code
+- Disabling the backend still leaves fetch/verify search fully correct
+
+Checklist:
+
+- [ ] Add `index build` command
+- [ ] Add `index rebuild` command
+- [ ] Add `index clear` command
+- [ ] Add `index status` command
+- [ ] Refactor the current SQLite FTS index into a `SearchBackend` implementation
+- [ ] Store index health and last-build metadata for `inspect`
+- [ ] Add indexed vs unindexed benchmark runs to Tier 0 and Tier 1
+
+### Phase 8: Hosted backend prototype
+
+Goal: make the search path backend-replaceable so a served index can stand in for the local sidecar.
+
+Dependencies:
+
+- Phase 7
+
+Deliverables:
+
+- hosted backend protocol and config binding
+- first remote `SearchBackend` implementation
+- planner selection rules for local vs hosted backend
+- explicit fallback and verification behavior when the backend is unavailable
+
+Acceptance criteria:
+
+- A corpus can be configured to use either the local embedded backend or a hosted backend through the same planner path
+- Hosted backend hits remain advisory; final provider-side verification still determines match truth
+- Backend outages degrade to manifest-plus-fetch behavior rather than corrupting results
+
+Checklist:
+
+- [ ] Define the hosted backend request/response contract
+- [ ] Add a concrete hosted `SearchBackend` client implementation
+- [ ] Wire backend selection through corpus config and runtime loading
+- [ ] Add fallback behavior when the hosted backend is unavailable or stale
+- [ ] Benchmark local-backend vs hosted-backend candidate quality and latency
+
+### Phase 9: Rendering and freshness semantics
+
+Goal: make search output and stale-state behavior match the richness of the internal anchor model.
+
+Dependencies:
+
+- Phase 7
+
+Deliverables:
+
+- richer plain-text rendering for page/slide/sheet/chunk anchors
+- stronger stale/drift accounting in search summaries
+- improved `inspect` visibility into sync age, index age, and verification age
+
+Acceptance criteria:
+
+- Plain-text output is grep-like for text files and still meaningfully locates page/slide/sheet matches for richer documents
+- Stale, deleted, denied, unsupported, and transient-failure cases are differentiated more clearly
+- Search and inspect output make it obvious when the manifest is old enough to affect confidence
+
+Checklist:
+
+- [ ] Improve plain-text rendering for non-line anchors
+- [ ] Add richer stale-state accounting beyond current partial-coverage counters
+- [ ] Surface manifest age, index age, and last verification metadata in `inspect`
+- [ ] Add anchor-rendering and stale-truthfulness benchmark assertions
+
+### Phase 10: Benchmark expansion and regression gates
+
+Goal: turn the benchmark scaffold into a meaningful regression program for search quality, latency, and cost.
+
+Dependencies:
+
+- Phases 7 through 9
+
+Deliverables:
+
+- materialized Tier 1 mixed-format runs
+- provider-matrix runs across local FS and S3-compatible storage
+- Tier 3 freshness-chaos execution
+- benchmark gating policy for indexed/unindexed and local/remote comparisons
+
+Acceptance criteria:
+
+- Benchmark runs cover local FS and S3-compatible modes
+- Benchmark reports distinguish planner, backend, fetch, and extraction costs
+- New backend and rendering changes can be judged against stable regression gates
+
+Checklist:
+
+- [ ] Materialize and run Tier 1 mixed-format benchmark corpora
+- [ ] Run the provider matrix suite against local FS and S3-compatible storage
+- [ ] Run Tier 3 freshness-chaos scenarios end to end
+- [ ] Add indexed-on vs indexed-off benchmark comparisons
+- [ ] Define hard and soft benchmark regression thresholds for CI and nightly use
+
+### Phase 11: S3 ergonomics and connector-ready UX
+
+Goal: make the first remote connector operationally solid and establish the ergonomics template for future connectors.
+
+Dependencies:
+
+- Phase 9
+
+Deliverables:
+
+- clearer S3 credential/profile/endpoint UX
+- better error reporting and validation for S3 config
+- connector ergonomics rules that future providers can follow
+
+Acceptance criteria:
+
+- S3 setup and failure modes are easy to diagnose from the CLI
+- Local FS and S3 remain aligned under one query model despite provider-specific setup differences
+- The connector abstraction is documented and operationally tested well enough to add the next provider cleanly
+
+Checklist:
+
+- [ ] Improve S3 credential and profile ergonomics in the CLI
+- [ ] Improve endpoint, region, and auth validation messages
+- [ ] Add more S3-specific integration and benchmark coverage for real-world configuration variants
+- [ ] Document connector ergonomics conventions for future providers
 
 ## Testing And Validation Strategy
 
@@ -882,14 +1034,14 @@ Decision: keep providers focused on content and metadata access, and model searc
 
 ## Immediate Next Actions
 
-These are the first implementation tasks after this plan lands:
+These are the next concrete steps after the current MVP:
 
-1. Implement the benchmark P0-lite scaffold from [BENCHMARK_PLAN.md](/Users/harshit/Desktop/net-rga/BENCHMARK_PLAN.md): schemas, tiny corpus, golden scenarios, and minimal harness.
-2. Bootstrap the Rust workspace with a CLI crate and a core library crate.
-3. Define core domain models plus provider, backend, anchor, and extractor traits.
-4. Implement the local config model, `manifest.db` schema, and local state directory conventions.
-5. Add local filesystem and S3 providers with integration test infrastructure.
-6. Build sync before search so the planner has a stable manifest to operate on.
+1. Refactor the embedded SQLite FTS index behind the `SearchBackend` abstraction without changing search correctness.
+2. Add first-class `index build`, `index rebuild`, `index clear`, and `index status` commands.
+3. Extend `inspect` so it reports manifest age, index age, and index build health.
+4. Expand benchmark execution to compare indexed vs unindexed runs on Tier 0 and Tier 1.
+5. Improve plain-text rendering for page, slide, sheet, and chunk anchors.
+6. Tighten stale-state reporting so benchmark freshness scenarios can become real regression gates.
 
 ## Definition Of Done For `PLAN.md`
 
