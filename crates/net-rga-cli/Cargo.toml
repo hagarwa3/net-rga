@@ -12,6 +12,7 @@ path = "src/main.rs"
 [dependencies]
 clap.workspace = true
 net-rga-core = { path = "../net-rga-core" }
+serde_json.workspace = true
 
 [lints]
 workspace = true
