@@ -1,14 +1,17 @@
+use std::collections::HashSet;
+
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use regex::Regex;
 use thiserror::Error;
 
-use crate::config::CorpusConfig;
+use crate::config::{CorpusConfig, StateLayout};
 use crate::contracts::{ContractError, Provider};
 use crate::domain::{
     CoverageCounts, CoverageStatus, DocumentMeta, SearchMatch, SearchRequest, SearchResponse,
     SearchSummary,
 };
 use crate::extraction::ExtractorRegistry;
+use crate::index::{IndexError, IndexedChunkHit, LexicalIndex};
 use crate::providers::provider_from_config;
 use crate::runtime::{ConfigStore, RuntimePaths};
 use crate::state::{ManifestDb, ManifestError};
@@ -21,6 +24,8 @@ pub enum SearchEngineError {
     Runtime(#[from] crate::runtime::RuntimeError),
     #[error("{0}")]
     Contract(#[from] ContractError),
+    #[error("{0}")]
+    Index(#[from] IndexError),
     #[error("invalid glob pattern: {0}")]
     InvalidGlob(String),
     #[error("invalid search pattern: {0}")]
@@ -68,6 +73,7 @@ pub fn execute_search(
     paths: &RuntimePaths,
     request: &SearchRequest,
 ) -> Result<SearchResponse, SearchEngineError> {
+    let layout = StateLayout::for_corpus(&paths.state_root, &request.corpus_id);
     let store = ConfigStore::new(paths.clone());
     let corpus = store
         .list_corpora()?
@@ -75,8 +81,35 @@ pub fn execute_search(
         .find(|candidate| candidate.id == request.corpus_id.0)
         .ok_or_else(|| SearchEngineError::InvalidPattern(format!("unknown corpus {}", request.corpus_id.0)))?;
     let provider = provider_from_config(&corpus.provider)?;
-    let candidates = rank_documents(filter_manifest_documents(paths, request)?, request);
-    execute_search_with_provider(request, &corpus, provider.as_ref(), candidates)
+    let manifest = ManifestDb::open(&layout.manifest_db)?;
+    let manifest_documents = manifest.list_documents(&request.corpus_id.0)?;
+    let filtered = filter_documents(manifest_documents.clone(), request)?;
+    let ranked = rank_documents(filtered, request);
+
+    let index_path = layout.index_dir.join("index.db");
+    let index = LexicalIndex::open(&index_path)?;
+    let _ = index.reconcile_manifest(&manifest_documents)?;
+    let index_hits = if request.fixed_strings {
+        index.query_fixed_string(
+            &request.query,
+            request
+                .limit
+                .map(|limit| usize::try_from(limit).unwrap_or(usize::MAX).saturating_mul(8))
+                .unwrap_or(ranked.len()),
+        )?
+    } else {
+        Vec::new()
+    };
+    let candidates = prioritize_index_hits(ranked, &index_hits);
+
+    execute_search_with_provider_and_index(
+        request,
+        &corpus,
+        provider.as_ref(),
+        candidates,
+        &index_hits,
+        Some(&index),
+    )
 }
 
 pub fn execute_search_with_provider(
@@ -85,11 +118,23 @@ pub fn execute_search_with_provider(
     provider: &dyn Provider,
     candidates: Vec<DocumentMeta>,
 ) -> Result<SearchResponse, SearchEngineError> {
+    execute_search_with_provider_and_index(request, _corpus, provider, candidates, &[], None)
+}
+
+fn execute_search_with_provider_and_index(
+    request: &SearchRequest,
+    _corpus: &CorpusConfig,
+    provider: &dyn Provider,
+    candidates: Vec<DocumentMeta>,
+    index_hits: &[IndexedChunkHit],
+    index: Option<&LexicalIndex>,
+) -> Result<SearchResponse, SearchEngineError> {
     let matcher = SearchMatcher::new(request)?;
     let mut matches = Vec::new();
     let mut fetched_candidates = 0_u64;
     let mut coverage_counts = CoverageCounts::default();
     let total_candidates = u64::try_from(candidates.len()).unwrap_or_default();
+    let indexed_candidates = unique_indexed_candidate_count(index_hits);
 
     for document in candidates {
         if !is_extractable_candidate(&document) {
@@ -125,6 +170,9 @@ pub fn execute_search_with_provider(
                 continue;
             }
         };
+        if let Some(index) = index {
+            let _ = index.upsert_document(&document, &canonical);
+        }
 
         for chunk in canonical.chunks {
             if !matcher.is_match(&chunk.text) {
@@ -165,7 +213,7 @@ pub fn execute_search_with_provider(
             corpus_id: request.corpus_id.clone(),
             query: request.query.clone(),
             total_candidates,
-            indexed_candidates: 0,
+            indexed_candidates,
             fetched_candidates,
             verified_matches: u64::try_from(matches.len()).unwrap_or_default(),
             coverage_status,
@@ -187,6 +235,41 @@ fn ranking_key(document: &DocumentMeta, query_lower: &str) -> (u8, u8, u64, std:
         modified_rank,
         document.locator.path.clone(),
     )
+}
+
+fn prioritize_index_hits(candidates: Vec<DocumentMeta>, hits: &[IndexedChunkHit]) -> Vec<DocumentMeta> {
+    let mut preferred = Vec::new();
+    let mut seen = HashSet::new();
+
+    for hit in hits {
+        seen.insert(hit.document_id.as_str());
+    }
+
+    for hit in hits {
+        if let Some(document) = candidates
+            .iter()
+            .find(|document| document.id.0 == hit.document_id)
+            .cloned()
+            && !preferred.iter().any(|candidate: &DocumentMeta| candidate.id == document.id)
+        {
+            preferred.push(document);
+        }
+    }
+
+    preferred.extend(
+        candidates
+            .into_iter()
+            .filter(|document| !seen.contains(document.id.0.as_str())),
+    );
+    preferred
+}
+
+fn unique_indexed_candidate_count(hits: &[IndexedChunkHit]) -> u64 {
+    let mut documents = HashSet::new();
+    for hit in hits {
+        documents.insert(hit.document_id.as_str());
+    }
+    u64::try_from(documents.len()).unwrap_or_default()
 }
 
 fn build_glob_matcher(path_globs: &[String]) -> Result<Option<GlobSet>, SearchEngineError> {
@@ -322,8 +405,12 @@ mod tests {
     use crate::domain::{
         CorpusId, DocumentId, DocumentLocator, SearchOutputFormat, SearchRequest,
     };
+    use crate::index::IndexedChunkHit;
 
-    use super::{execute_search_with_provider, filter_documents, rank_documents};
+    use super::{
+        execute_search_with_provider, execute_search_with_provider_and_index, filter_documents,
+        prioritize_index_hits, rank_documents,
+    };
 
     fn request() -> SearchRequest {
         SearchRequest {
@@ -536,5 +623,112 @@ mod tests {
         assert_eq!(response.summary.fetched_candidates, 3);
         assert_eq!(response.summary.coverage_counts.deleted_count, 1);
         assert_eq!(response.summary.coverage_counts.unsupported_count, 1);
+    }
+
+    #[test]
+    fn prioritize_index_hits_moves_indexed_documents_to_the_front() {
+        let ranked = rank_documents(
+            vec![
+                crate::domain::DocumentMeta {
+                    id: DocumentId("docs/alpha.txt".to_owned()),
+                    locator: DocumentLocator {
+                        path: "docs/alpha.txt".to_owned(),
+                    },
+                    extension: Some("txt".to_owned()),
+                    content_type: Some("text/plain".to_owned()),
+                    version: Some("v1".to_owned()),
+                    size_bytes: 50,
+                    modified_at: Some("100".to_owned()),
+                },
+                crate::domain::DocumentMeta {
+                    id: DocumentId("docs/beta.txt".to_owned()),
+                    locator: DocumentLocator {
+                        path: "docs/beta.txt".to_owned(),
+                    },
+                    extension: Some("txt".to_owned()),
+                    content_type: Some("text/plain".to_owned()),
+                    version: Some("v1".to_owned()),
+                    size_bytes: 75,
+                    modified_at: Some("100".to_owned()),
+                },
+            ],
+            &request(),
+        );
+
+        let prioritized = prioritize_index_hits(
+            ranked,
+            &[IndexedChunkHit {
+                document_id: "docs/beta.txt".to_owned(),
+                path: "docs/beta.txt".to_owned(),
+                anchor_ref: "kind=line_span|path=docs/beta.txt|line_start=1|line_end=1".to_owned(),
+                snippet: "riverglass beta".to_owned(),
+                score: -1.0,
+            }],
+        );
+
+        assert_eq!(prioritized[0].id.0, "docs/beta.txt");
+    }
+
+    #[test]
+    fn stale_index_hits_do_not_bypass_final_verification() {
+        struct StaleHitProvider;
+
+        impl Provider for StaleHitProvider {
+            fn list(&self, _prefix: &str, _cursor: Option<&str>) -> Result<crate::contracts::ListPage, ContractError> {
+                Err(ContractError::Unsupported("list not used".to_owned()))
+            }
+
+            fn stat(&self, _document_id: &DocumentId) -> Result<crate::domain::DocumentMeta, ContractError> {
+                Err(ContractError::Unsupported("stat not used".to_owned()))
+            }
+
+            fn read(&self, _document_id: &DocumentId, _range: Option<ByteRange>) -> Result<ReadPayload, ContractError> {
+                Ok(ReadPayload {
+                    bytes: b"content changed and no longer matches".to_vec(),
+                })
+            }
+
+            fn resolve(&self, _locator: &DocumentLocator) -> Result<ResolvedDocument, ContractError> {
+                Err(ContractError::Unsupported("resolve not used".to_owned()))
+            }
+        }
+
+        let response = execute_search_with_provider_and_index(
+            &request(),
+            &CorpusConfig {
+                id: "local".to_owned(),
+                display_name: Some("Local".to_owned()),
+                provider: ProviderConfig::LocalFs {
+                    root: std::path::PathBuf::from("/tmp/docs"),
+                },
+                include_globs: Vec::new(),
+                exclude_globs: Vec::new(),
+                backend: None,
+            },
+            &StaleHitProvider,
+            vec![crate::domain::DocumentMeta {
+                id: DocumentId("docs/report.txt".to_owned()),
+                locator: DocumentLocator {
+                    path: "docs/report.txt".to_owned(),
+                },
+                extension: Some("txt".to_owned()),
+                content_type: Some("text/plain".to_owned()),
+                version: Some("v1".to_owned()),
+                size_bytes: 42,
+                modified_at: Some("200".to_owned()),
+            }],
+            &[IndexedChunkHit {
+                document_id: "docs/report.txt".to_owned(),
+                path: "docs/report.txt".to_owned(),
+                anchor_ref: "kind=line_span|path=docs/report.txt|line_start=1|line_end=1".to_owned(),
+                snippet: "riverglass appears here".to_owned(),
+                score: -1.0,
+            }],
+            None,
+        )
+        .unwrap_or_else(|error| panic!("search should execute: {error}"));
+
+        assert!(response.matches.is_empty());
+        assert_eq!(response.summary.indexed_candidates, 1);
     }
 }

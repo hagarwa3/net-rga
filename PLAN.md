@@ -691,7 +691,7 @@ Checklist:
 - [x] Integrate PDF extraction adapter
 - [x] Integrate Office extraction adapter
 - [x] Define index schema and index update strategy
-- [ ] Use index hits as planner input without bypassing final verification
+- [x] Use index hits as planner input without bypassing final verification
 
 ### Phase 5: Export/import bundle
 
