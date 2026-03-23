@@ -90,6 +90,9 @@ pub fn sync_corpus_config(paths: &RuntimePaths, corpus: &CorpusConfig) -> Result
 
     loop {
         let page = provider.list("", cursor.as_deref())?;
+        for document in &page.documents {
+            manifest.upsert_document(&corpus.id, document, &started_at)?;
+        }
         listed_documents += u64::try_from(page.documents.len()).unwrap_or_default();
         pages_processed += 1;
         cursor = page.next_cursor.clone();
@@ -217,6 +220,12 @@ mod tests {
 
         assert!(started.is_some());
         assert!(completed.is_some());
+        assert_eq!(
+            manifest
+                .document_count("local")
+                .unwrap_or_else(|error| panic!("document count should query: {error}")),
+            1
+        );
 
         fs::remove_dir_all(state_root).ok();
     }

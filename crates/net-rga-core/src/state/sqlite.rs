@@ -1,10 +1,11 @@
 use std::fs;
 use std::path::Path;
 
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use thiserror::Error;
 
 use crate::config::CorpusConfig;
+use crate::domain::DocumentMeta;
 use crate::state::MANIFEST_SCHEMA_V1;
 
 const MANIFEST_SCHEMA_VERSION: u32 = 1;
@@ -19,6 +20,13 @@ pub enum ManifestError {
 
 pub struct ManifestDb {
     connection: Connection,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DocumentUpsertStatus {
+    Inserted,
+    Updated,
+    Unchanged,
 }
 
 impl ManifestDb {
@@ -93,6 +101,104 @@ impl ManifestDb {
             Err(error) => Err(ManifestError::Sqlite(error)),
         }
     }
+
+    pub fn upsert_document(
+        &self,
+        corpus_id: &str,
+        document: &DocumentMeta,
+        last_seen_at: &str,
+    ) -> Result<DocumentUpsertStatus, ManifestError> {
+        let existing: Option<(Option<String>, String, u64, Option<String>)> = self
+            .connection
+            .query_row(
+                "SELECT version, path, size_bytes, modified_at
+                 FROM documents
+                 WHERE corpus_id = ?1 AND document_id = ?2",
+                rusqlite::params![corpus_id, document.id.0],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .optional()?;
+
+        self.connection.execute(
+            "INSERT INTO documents (
+                 corpus_id,
+                 document_id,
+                 path,
+                 extension,
+                 content_type,
+                 version,
+                 size_bytes,
+                 modified_at,
+                 last_seen_at,
+                 extraction_status,
+                 index_status,
+                 cache_status
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'pending', 'pending', 'pending')
+             ON CONFLICT(corpus_id, document_id) DO UPDATE SET
+                 path = excluded.path,
+                 extension = excluded.extension,
+                 content_type = excluded.content_type,
+                 version = excluded.version,
+                 size_bytes = excluded.size_bytes,
+                 modified_at = excluded.modified_at,
+                 last_seen_at = excluded.last_seen_at,
+                 extraction_status = CASE
+                     WHEN COALESCE(documents.version, '') <> COALESCE(excluded.version, '')
+                         OR documents.size_bytes <> excluded.size_bytes
+                         OR COALESCE(documents.modified_at, '') <> COALESCE(excluded.modified_at, '')
+                     THEN 'pending'
+                     ELSE documents.extraction_status
+                 END,
+                 index_status = CASE
+                     WHEN COALESCE(documents.version, '') <> COALESCE(excluded.version, '')
+                         OR documents.size_bytes <> excluded.size_bytes
+                         OR COALESCE(documents.modified_at, '') <> COALESCE(excluded.modified_at, '')
+                     THEN 'pending'
+                     ELSE documents.index_status
+                 END,
+                 cache_status = CASE
+                     WHEN COALESCE(documents.version, '') <> COALESCE(excluded.version, '')
+                         OR documents.size_bytes <> excluded.size_bytes
+                         OR COALESCE(documents.modified_at, '') <> COALESCE(excluded.modified_at, '')
+                     THEN 'pending'
+                     ELSE documents.cache_status
+                 END",
+            rusqlite::params![
+                corpus_id,
+                document.id.0,
+                document.locator.path,
+                document.extension,
+                document.content_type,
+                document.version,
+                document.size_bytes,
+                document.modified_at,
+                last_seen_at
+            ],
+        )?;
+
+        Ok(match existing {
+            None => DocumentUpsertStatus::Inserted,
+            Some((version, path, size_bytes, modified_at))
+                if version == document.version
+                    && path == document.locator.path
+                    && size_bytes == document.size_bytes
+                    && modified_at == document.modified_at =>
+            {
+                DocumentUpsertStatus::Unchanged
+            }
+            Some(_) => DocumentUpsertStatus::Updated,
+        })
+    }
+
+    pub fn document_count(&self, corpus_id: &str) -> Result<u64, ManifestError> {
+        self.connection
+            .query_row(
+                "SELECT COUNT(*) FROM documents WHERE corpus_id = ?1",
+                [corpus_id],
+                |row| row.get(0),
+            )
+            .map_err(ManifestError::Sqlite)
+    }
 }
 
 pub fn open_manifest_db(path: &Path) -> Result<Connection, ManifestError> {
@@ -120,8 +226,9 @@ mod tests {
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use super::{ManifestDb, open_manifest_db};
+    use super::{DocumentUpsertStatus, ManifestDb, open_manifest_db};
     use crate::config::{CorpusConfig, ProviderConfig};
+    use crate::domain::{DocumentId, DocumentLocator, DocumentMeta};
 
     fn temp_manifest_path() -> PathBuf {
         let nanos = SystemTime::now()
@@ -227,6 +334,73 @@ mod tests {
                 .unwrap_or_else(|error| panic!("corpus root should query: {error}"));
 
             assert_eq!(root, "/tmp/docs");
+        }
+        fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn manifest_db_upserts_document_metadata() {
+        let path = temp_manifest_path();
+        {
+            let manifest =
+                ManifestDb::open(&path).unwrap_or_else(|error| panic!("manifest should open: {error}"));
+            let corpus = CorpusConfig {
+                id: "local".to_owned(),
+                display_name: Some("Local".to_owned()),
+                provider: ProviderConfig::LocalFs {
+                    root: PathBuf::from("/tmp/docs"),
+                },
+                include_globs: Vec::new(),
+                exclude_globs: Vec::new(),
+                backend: None,
+            };
+            manifest
+                .upsert_corpus(&corpus, "local_fs", "/tmp/docs", "id = 'local'", "1000")
+                .unwrap_or_else(|error| panic!("corpus should persist: {error}"));
+
+            let inserted = manifest
+                .upsert_document(
+                    "local",
+                    &DocumentMeta {
+                        id: DocumentId("docs/report.txt".to_owned()),
+                        locator: DocumentLocator {
+                            path: "docs/report.txt".to_owned(),
+                        },
+                        extension: Some("txt".to_owned()),
+                        content_type: Some("text/plain".to_owned()),
+                        version: Some("v1".to_owned()),
+                        size_bytes: 10,
+                        modified_at: Some("1000".to_owned()),
+                    },
+                    "1000",
+                )
+                .unwrap_or_else(|error| panic!("document should upsert: {error}"));
+            let updated = manifest
+                .upsert_document(
+                    "local",
+                    &DocumentMeta {
+                        id: DocumentId("docs/report.txt".to_owned()),
+                        locator: DocumentLocator {
+                            path: "docs/report.txt".to_owned(),
+                        },
+                        extension: Some("txt".to_owned()),
+                        content_type: Some("text/plain".to_owned()),
+                        version: Some("v2".to_owned()),
+                        size_bytes: 20,
+                        modified_at: Some("2000".to_owned()),
+                    },
+                    "2000",
+                )
+                .unwrap_or_else(|error| panic!("document should update: {error}"));
+
+            assert_eq!(inserted, DocumentUpsertStatus::Inserted);
+            assert_eq!(updated, DocumentUpsertStatus::Updated);
+            assert_eq!(
+                manifest
+                    .document_count("local")
+                    .unwrap_or_else(|error| panic!("document count should query: {error}")),
+                1
+            );
         }
         fs::remove_file(path).ok();
     }
