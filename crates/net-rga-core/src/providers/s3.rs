@@ -77,11 +77,15 @@ impl S3Provider {
     pub fn new(config: S3ConnectionConfig) -> Result<Self, ContractError> {
         let runtime = Runtime::new().map_err(|error| ContractError::Io(error.to_string()))?;
         let client = build_client(&runtime, &config)?;
-        Ok(Self {
+        Ok(Self::from_parts(config, runtime, client))
+    }
+
+    pub fn from_parts(config: S3ConnectionConfig, runtime: Runtime, client: Client) -> Self {
+        Self {
             config,
             runtime,
             client,
-        })
+        }
     }
 
     pub fn config(&self) -> &S3ConnectionConfig {
