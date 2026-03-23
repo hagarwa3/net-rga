@@ -5,6 +5,7 @@ pub mod domain;
 pub mod extraction;
 mod extractor_adapters;
 pub mod index;
+mod lexical;
 pub mod providers;
 pub mod runtime;
 pub mod search_engine;

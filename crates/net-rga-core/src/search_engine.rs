@@ -1,7 +1,6 @@
 use std::collections::HashSet;
 
 use globset::{Glob, GlobSet, GlobSetBuilder};
-use regex::Regex;
 use thiserror::Error;
 
 use crate::config::{CorpusConfig, StateLayout};
@@ -12,6 +11,7 @@ use crate::domain::{
 };
 use crate::extraction::ExtractorRegistry;
 use crate::index::{IndexError, IndexedChunkHit, LexicalIndex};
+use crate::lexical::LexicalVerifier;
 use crate::providers::provider_from_config;
 use crate::runtime::{ConfigStore, RuntimePaths};
 use crate::state::{ManifestDb, ManifestError};
@@ -30,6 +30,8 @@ pub enum SearchEngineError {
     InvalidGlob(String),
     #[error("invalid search pattern: {0}")]
     InvalidPattern(String),
+    #[error("search runtime error: {0}")]
+    SearchRuntime(String),
 }
 
 pub fn filter_manifest_documents(
@@ -129,7 +131,10 @@ fn execute_search_with_provider_and_index(
     index_hits: &[IndexedChunkHit],
     index: Option<&LexicalIndex>,
 ) -> Result<SearchResponse, SearchEngineError> {
-    let matcher = SearchMatcher::new(request)?;
+    let mut verifier = LexicalVerifier::new(request).map_err(|error| match error {
+        crate::lexical::LexicalError::InvalidPattern(message) => SearchEngineError::InvalidPattern(message),
+        crate::lexical::LexicalError::SearchRuntime(message) => SearchEngineError::SearchRuntime(message),
+    })?;
     let mut matches = Vec::new();
     let mut fetched_candidates = 0_u64;
     let mut coverage_counts = CoverageCounts::default();
@@ -175,14 +180,24 @@ fn execute_search_with_provider_and_index(
         }
 
         for chunk in canonical.chunks {
-            if !matcher.is_match(&chunk.text) {
+            let Some(snippet) = verifier
+                .first_matching_snippet(&chunk.text)
+                .map_err(|error| match error {
+                    crate::lexical::LexicalError::InvalidPattern(message) => {
+                        SearchEngineError::InvalidPattern(message)
+                    }
+                    crate::lexical::LexicalError::SearchRuntime(message) => {
+                        SearchEngineError::SearchRuntime(message)
+                    }
+                })?
+            else {
                 continue;
-            }
+            };
 
             matches.push(SearchMatch {
                 document_id: document.id.clone(),
                 anchor: chunk.anchor,
-                snippet: chunk.text,
+                snippet,
                 verified: true,
             });
 
@@ -367,35 +382,6 @@ fn parse_modified_at(modified_at: Option<&str>) -> u64 {
     modified_at
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or_default()
-}
-
-struct SearchMatcher {
-    regex: Option<Regex>,
-    query: String,
-    fixed_strings: bool,
-}
-
-impl SearchMatcher {
-    fn new(request: &SearchRequest) -> Result<Self, SearchEngineError> {
-        let regex = if request.fixed_strings {
-            None
-        } else {
-            Some(Regex::new(&request.query).map_err(|error| SearchEngineError::InvalidPattern(error.to_string()))?)
-        };
-        Ok(Self {
-            regex,
-            query: request.query.clone(),
-            fixed_strings: request.fixed_strings,
-        })
-    }
-
-    fn is_match(&self, line: &str) -> bool {
-        if self.fixed_strings {
-            line.contains(&self.query)
-        } else {
-            self.regex.as_ref().is_some_and(|regex| regex.is_match(line))
-        }
-    }
 }
 
 #[cfg(test)]
@@ -812,5 +798,71 @@ mod tests {
         assert_eq!(response.summary.coverage_counts.denied_count, 1);
         assert_eq!(response.summary.coverage_counts.failure_count, 1);
         assert!(matches!(response.summary.coverage_status, crate::domain::CoverageStatus::Partial));
+    }
+
+    #[test]
+    fn regex_queries_use_ripgrep_matcher_for_verification() {
+        struct RegexProvider;
+
+        impl Provider for RegexProvider {
+            fn list(&self, _prefix: &str, _cursor: Option<&str>) -> Result<crate::contracts::ListPage, ContractError> {
+                Err(ContractError::Unsupported("list not used".to_owned()))
+            }
+
+            fn stat(&self, _document_id: &DocumentId) -> Result<crate::domain::DocumentMeta, ContractError> {
+                Err(ContractError::Unsupported("stat not used".to_owned()))
+            }
+
+            fn read(&self, _document_id: &DocumentId, _range: Option<ByteRange>) -> Result<ReadPayload, ContractError> {
+                Ok(ReadPayload {
+                    bytes: b"alpha\nriverglass appears here\nomega".to_vec(),
+                })
+            }
+
+            fn resolve(&self, _locator: &DocumentLocator) -> Result<ResolvedDocument, ContractError> {
+                Err(ContractError::Unsupported("resolve not used".to_owned()))
+            }
+        }
+
+        let response = execute_search_with_provider(
+            &SearchRequest {
+                query: r"river\w+\s+appears".to_owned(),
+                fixed_strings: false,
+                extensions: Vec::new(),
+                content_types: Vec::new(),
+                size_min: None,
+                size_max: None,
+                modified_after: None,
+                modified_before: None,
+                limit: None,
+                ..request()
+            },
+            &CorpusConfig {
+                id: "local".to_owned(),
+                display_name: Some("Local".to_owned()),
+                provider: ProviderConfig::LocalFs {
+                    root: std::path::PathBuf::from("/tmp/docs"),
+                },
+                include_globs: Vec::new(),
+                exclude_globs: Vec::new(),
+                backend: None,
+            },
+            &RegexProvider,
+            vec![crate::domain::DocumentMeta {
+                id: DocumentId("docs/report.txt".to_owned()),
+                locator: DocumentLocator {
+                    path: "docs/report.txt".to_owned(),
+                },
+                extension: Some("txt".to_owned()),
+                content_type: Some("text/plain".to_owned()),
+                version: Some("v1".to_owned()),
+                size_bytes: 42,
+                modified_at: Some("200".to_owned()),
+            }],
+        )
+        .unwrap_or_else(|error| panic!("search should execute: {error}"));
+
+        assert_eq!(response.matches.len(), 1);
+        assert_eq!(response.matches[0].snippet, "riverglass appears here");
     }
 }
