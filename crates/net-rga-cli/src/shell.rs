@@ -20,6 +20,12 @@ pub struct CommandOutcome {
     pub exit_code: u8,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct SearchRenderOptions {
+    stats: bool,
+    verbose: bool,
+}
+
 #[derive(Debug, Subcommand)]
 pub enum Commands {
     Corpus(CorpusCommand),
@@ -94,6 +100,10 @@ pub struct SearchArgs {
     pub limit: Option<u32>,
     #[arg(short = 'F', long = "fixed-strings")]
     pub fixed_strings: bool,
+    #[arg(long = "stats")]
+    pub stats: bool,
+    #[arg(short = 'v', long = "verbose")]
+    pub verbose: bool,
     #[arg(long = "json")]
     pub json: bool,
 }
@@ -229,8 +239,9 @@ fn handle_sync_with_paths(paths: &RuntimePaths, corpus: &str) -> Result<String, 
 
 fn handle_search(args: SearchArgs) -> Result<CommandOutcome, String> {
     let request = build_search_request(&args);
+    let render_options = build_search_render_options(&args);
     let paths = RuntimePaths::from_env().map_err(|error| error.to_string())?;
-    handle_search_with_paths(&paths, &request)
+    handle_search_with_paths(&paths, &request, &render_options)
 }
 
 fn handle_inspect(args: InspectArgs) -> Result<String, String> {
@@ -326,10 +337,14 @@ fn handle_import(args: ImportArgs) -> Result<String, String> {
     ))
 }
 
-fn handle_search_with_paths(paths: &RuntimePaths, request: &SearchRequest) -> Result<CommandOutcome, String> {
+fn handle_search_with_paths(
+    paths: &RuntimePaths,
+    request: &SearchRequest,
+    render_options: &SearchRenderOptions,
+) -> Result<CommandOutcome, String> {
     let response = execute_search(paths, request).map_err(|error| error.to_string())?;
     Ok(CommandOutcome {
-        output: render_search_output(&response)?,
+        output: render_search_output(&response, render_options)?,
         exit_code: search_exit_code(&response),
     })
 }
@@ -355,11 +370,38 @@ fn build_search_request(args: &SearchArgs) -> SearchRequest {
     }
 }
 
-fn render_search_text(response: &SearchResponse) -> String {
-    let mut lines = if response.matches.is_empty() {
-        vec!["no matches".to_owned()]
-    } else {
-        response
+fn build_search_render_options(args: &SearchArgs) -> SearchRenderOptions {
+    SearchRenderOptions {
+        stats: args.stats,
+        verbose: args.verbose,
+    }
+}
+
+fn render_search_text(response: &SearchResponse, render_options: &SearchRenderOptions) -> String {
+    let mut lines = render_match_lines(response);
+    let partial_notice = render_partial_notice(response);
+
+    if let Some(notice) = partial_notice.as_deref() {
+        lines.push(notice.to_owned());
+    }
+    if render_options.stats {
+        if !lines.is_empty() {
+            lines.push(String::new());
+        }
+        lines.extend(render_stats_lines(response));
+    }
+    if render_options.verbose {
+        if !lines.is_empty() {
+            lines.push(String::new());
+        }
+        lines.push(render_verbose_summary(response));
+    }
+
+    lines.join("\n")
+}
+
+fn render_match_lines(response: &SearchResponse) -> Vec<String> {
+    response
         .matches
         .iter()
         .map(|search_match| {
@@ -374,15 +416,74 @@ fn render_search_text(response: &SearchResponse) -> String {
                 None => format!("{path}:{}", search_match.snippet),
             }
         })
-        .collect::<Vec<_>>()
-    };
+        .collect()
+}
 
-    lines.push(format!(
-        "-- summary: corpus={} matches={} candidates={} fetched={} coverage={} deleted={} denied={} stale={} unsupported={} failed={}",
+fn render_partial_notice(response: &SearchResponse) -> Option<String> {
+    if !matches!(response.summary.coverage_status, net_rga_core::CoverageStatus::Partial) {
+        return None;
+    }
+
+    let counters = nonzero_coverage_counts(response);
+    if counters.is_empty() {
+        Some("[partial coverage]".to_owned())
+    } else {
+        Some(format!("[partial coverage: {}]", counters.join(" ")))
+    }
+}
+
+fn nonzero_coverage_counts(response: &SearchResponse) -> Vec<String> {
+    let counts = &response.summary.coverage_counts;
+    [
+        ("deleted", counts.deleted_count),
+        ("denied", counts.denied_count),
+        ("stale", counts.stale_count),
+        ("unsupported", counts.unsupported_count),
+        ("failed", counts.failure_count),
+    ]
+    .into_iter()
+    .filter(|&(_label, value)| value > 0)
+    .map(|(label, value)| format!("{label}={value}"))
+    .collect()
+}
+
+fn render_stats_lines(response: &SearchResponse) -> Vec<String> {
+    let matched_documents = response
+        .matches
+        .iter()
+        .map(|search_match| search_match.document_id.0.as_str())
+        .collect::<std::collections::BTreeSet<_>>()
+        .len();
+    let coverage = match response.summary.coverage_status {
+        net_rga_core::CoverageStatus::Complete => "complete",
+        net_rga_core::CoverageStatus::Partial => "partial",
+    };
+    let counts = &response.summary.coverage_counts;
+
+    vec![
+        format!("{} verified matches", response.summary.verified_matches),
+        format!("{} matched anchors", response.matches.len()),
+        format!("{matched_documents} documents contained matches"),
+        format!("{} candidates considered", response.summary.total_candidates),
+        format!("{} candidates fetched", response.summary.fetched_candidates),
+        format!("{} indexed candidates", response.summary.indexed_candidates),
+        format!("coverage: {coverage}"),
+        format!("{} deleted candidates", counts.deleted_count),
+        format!("{} denied candidates", counts.denied_count),
+        format!("{} stale candidates", counts.stale_count),
+        format!("{} unsupported candidates", counts.unsupported_count),
+        format!("{} failed candidates", counts.failure_count),
+    ]
+}
+
+fn render_verbose_summary(response: &SearchResponse) -> String {
+    format!(
+        "-- summary: corpus={} matches={} candidates={} fetched={} indexed={} coverage={} deleted={} denied={} stale={} unsupported={} failed={}",
         response.summary.corpus_id.0,
         response.summary.verified_matches,
         response.summary.total_candidates,
         response.summary.fetched_candidates,
+        response.summary.indexed_candidates,
         match response.summary.coverage_status {
             net_rga_core::CoverageStatus::Complete => "complete",
             net_rga_core::CoverageStatus::Partial => "partial",
@@ -392,14 +493,12 @@ fn render_search_text(response: &SearchResponse) -> String {
         response.summary.coverage_counts.stale_count,
         response.summary.coverage_counts.unsupported_count,
         response.summary.coverage_counts.failure_count,
-    ));
-
-    lines.join("\n")
+    )
 }
 
-fn render_search_output(response: &SearchResponse) -> Result<String, String> {
+fn render_search_output(response: &SearchResponse, render_options: &SearchRenderOptions) -> Result<String, String> {
     match response.request.output_format {
-        SearchOutputFormat::Text => Ok(render_search_text(response)),
+        SearchOutputFormat::Text => Ok(render_search_text(response, render_options)),
         SearchOutputFormat::Json => serde_json::to_string_pretty(response).map_err(|error| error.to_string()),
     }
 }
@@ -449,8 +548,9 @@ mod tests {
     use net_rga_core::{ConfigStore, CorpusConfig, ProviderConfig, RuntimePaths, SearchOutputFormat};
 
     use super::{
-        Cli, Commands, CorpusSubcommand, build_search_request, handle_inspect_with_paths,
-        handle_search_with_paths, handle_sync_with_paths,
+        Cli, Commands, CorpusSubcommand, SearchRenderOptions, build_search_render_options,
+        build_search_request, handle_inspect_with_paths, handle_search_with_paths,
+        handle_sync_with_paths,
     };
 
     static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -532,7 +632,7 @@ mod tests {
             Commands::Search(args) => build_search_request(&args),
             _ => panic!("expected search command"),
         };
-        let outcome = handle_search_with_paths(&paths, &request)
+        let outcome = handle_search_with_paths(&paths, &request, &SearchRenderOptions::default())
             .unwrap_or_else(|error| panic!("search should render: {error}"));
         assert_eq!(outcome.output, snapshot("search_text.snap"));
         assert_eq!(outcome.exit_code, 0);
@@ -571,7 +671,7 @@ mod tests {
             Commands::Search(args) => build_search_request(&args),
             _ => panic!("expected search command"),
         };
-        let output = handle_search_with_paths(&paths, &request)
+        let output = handle_search_with_paths(&paths, &request, &SearchRenderOptions::default())
             .unwrap_or_else(|error| panic!("json search should render: {error}"));
         assert_eq!(output.output, snapshot("search_json.snap"));
         assert_eq!(output.exit_code, 0);
@@ -603,11 +703,13 @@ mod tests {
             "--max-count",
             "3",
             "--fixed-strings",
+            "--stats",
+            "--verbose",
             "--json",
         ]);
 
-        let request = match cli.command {
-            Commands::Search(args) => build_search_request(&args),
+        let (request, render_options) = match cli.command {
+            Commands::Search(args) => (build_search_request(&args), build_search_render_options(&args)),
             _ => panic!("expected search command"),
         };
 
@@ -617,6 +719,8 @@ mod tests {
         assert!(request.fixed_strings);
         assert_eq!(request.limit, Some(3));
         assert_eq!(request.output_format, SearchOutputFormat::Json);
+        assert!(render_options.stats);
+        assert!(render_options.verbose);
     }
 
     #[test]
@@ -680,11 +784,11 @@ mod tests {
             Commands::Search(args) => build_search_request(&args),
             _ => panic!("expected search command"),
         };
-        let outcome = handle_search_with_paths(&paths, &request)
+        let outcome = handle_search_with_paths(&paths, &request, &SearchRenderOptions::default())
             .unwrap_or_else(|error| panic!("search should render: {error}"));
 
         assert_eq!(outcome.exit_code, 1);
-        assert!(outcome.output.starts_with("no matches"));
+        assert!(outcome.output.is_empty());
 
         fs::remove_dir_all(state_root).ok();
     }
@@ -724,11 +828,91 @@ mod tests {
             Commands::Search(args) => build_search_request(&args),
             _ => panic!("expected search command"),
         };
-        let outcome = handle_search_with_paths(&paths, &request)
+        let outcome = handle_search_with_paths(&paths, &request, &SearchRenderOptions::default())
             .unwrap_or_else(|error| panic!("search should render: {error}"));
 
         assert_eq!(outcome.exit_code, 3);
-        assert!(outcome.output.contains("coverage=partial"));
+        assert!(outcome.output.contains("[partial coverage: unsupported=1]"));
+
+        fs::remove_dir_all(state_root).ok();
+    }
+
+    #[test]
+    fn search_stats_output_emits_rg_like_summary_block() {
+        let state_root = temp_state_root();
+        let corpus_root = state_root.join("fixtures");
+        fs::create_dir_all(corpus_root.join("docs"))
+            .unwrap_or_else(|error| panic!("fixture dir should create: {error}"));
+        fs::write(corpus_root.join("docs/report.txt"), "riverglass appears here")
+            .unwrap_or_else(|error| panic!("fixture should write: {error}"));
+
+        let paths = RuntimePaths::from_state_root(state_root.clone());
+        let store = ConfigStore::new(paths.clone());
+        store
+            .add_corpus(CorpusConfig {
+                id: "local".to_owned(),
+                display_name: Some("Local".to_owned()),
+                provider: ProviderConfig::LocalFs {
+                    root: corpus_root.clone(),
+                },
+                include_globs: Vec::new(),
+                exclude_globs: Vec::new(),
+                backend: None,
+            })
+            .unwrap_or_else(|error| panic!("corpus should save: {error}"));
+        handle_sync_with_paths(&paths, "local")
+            .unwrap_or_else(|error| panic!("sync should succeed: {error}"));
+
+        let cli = Cli::parse_from(["net-rga", "search", "riverglass", "local", "--stats"]);
+        let (request, render_options) = match cli.command {
+            Commands::Search(args) => (build_search_request(&args), build_search_render_options(&args)),
+            _ => panic!("expected search command"),
+        };
+        let outcome = handle_search_with_paths(&paths, &request, &render_options)
+            .unwrap_or_else(|error| panic!("search should render: {error}"));
+
+        assert!(outcome.output.contains("1 verified matches"));
+        assert!(outcome.output.contains("1 documents contained matches"));
+        assert!(outcome.output.contains("coverage: complete"));
+
+        fs::remove_dir_all(state_root).ok();
+    }
+
+    #[test]
+    fn search_verbose_output_emits_detailed_summary_line() {
+        let state_root = temp_state_root();
+        let corpus_root = state_root.join("fixtures");
+        fs::create_dir_all(corpus_root.join("docs"))
+            .unwrap_or_else(|error| panic!("fixture dir should create: {error}"));
+        fs::write(corpus_root.join("docs/report.txt"), "riverglass appears here")
+            .unwrap_or_else(|error| panic!("fixture should write: {error}"));
+
+        let paths = RuntimePaths::from_state_root(state_root.clone());
+        let store = ConfigStore::new(paths.clone());
+        store
+            .add_corpus(CorpusConfig {
+                id: "local".to_owned(),
+                display_name: Some("Local".to_owned()),
+                provider: ProviderConfig::LocalFs {
+                    root: corpus_root.clone(),
+                },
+                include_globs: Vec::new(),
+                exclude_globs: Vec::new(),
+                backend: None,
+            })
+            .unwrap_or_else(|error| panic!("corpus should save: {error}"));
+        handle_sync_with_paths(&paths, "local")
+            .unwrap_or_else(|error| panic!("sync should succeed: {error}"));
+
+        let cli = Cli::parse_from(["net-rga", "search", "riverglass", "local", "--verbose"]);
+        let (request, render_options) = match cli.command {
+            Commands::Search(args) => (build_search_request(&args), build_search_render_options(&args)),
+            _ => panic!("expected search command"),
+        };
+        let outcome = handle_search_with_paths(&paths, &request, &render_options)
+            .unwrap_or_else(|error| panic!("search should render: {error}"));
+
+        assert!(outcome.output.contains("-- summary: corpus=local"));
 
         fs::remove_dir_all(state_root).ok();
     }

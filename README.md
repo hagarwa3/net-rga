@@ -132,6 +132,8 @@ net-rga search <pattern> <corpus> \
   --modified-before 2000 \
   --max-count 10 \
   --fixed-strings \
+  --stats \
+  --verbose \
   --json
 ```
 
@@ -141,6 +143,9 @@ Supported search behavior in v0:
 - manifest-side path, type, size, and time filters
 - canonical extraction for supported document formats
 - grep-like text rendering
+- quiet default text output that prints matches only
+- `--stats` for an `rg`-style summary block
+- `--verbose` for the fuller corpus/search summary line
 - JSON output for agent-friendly consumption
 - coverage reporting for deleted, denied, unsupported, stale, and failed candidates
 
