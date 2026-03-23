@@ -541,7 +541,7 @@ Checklist:
 - [x] Add base crates and lint/test scaffolding
 - [x] Define domain models for corpus, document identity, metadata, anchors, and search summary
 - [x] Define provider, optional capability, search backend, and extractor traits
-- [ ] Define config schema and local state directory conventions
+- [x] Define config schema and local state directory conventions
 - [ ] Add a thin CLI shell with subcommand placeholders
 
 ### Phase 1: SQLite schema, corpus registration, local filesystem and S3 providers

@@ -1,6 +1,10 @@
+pub mod config;
 pub mod contracts;
 pub mod domain;
 
+pub use config::{
+    AppConfig, BackendBinding, CorpusConfig, ProviderConfig, StateLayout, DEFAULT_STATE_DIR_NAME,
+};
 pub use contracts::{
     ByteRange, ContractError, DeltaCapability, DeltaEvent, DeltaPage, ExtractedDocument,
     ExtractionWarning, Extractor, ListPage, OpenUrlCapability, PermissionEntry,
