@@ -4,13 +4,13 @@ use globset::{Glob, GlobSet, GlobSetBuilder};
 use thiserror::Error;
 
 use crate::config::{CorpusConfig, StateLayout};
-use crate::contracts::{ContractError, Provider};
+use crate::contracts::{ContractError, Provider, SearchBackend, SearchCandidate, SearchQuerySpec};
 use crate::domain::{
     CoverageCounts, CoverageStatus, DocumentMeta, SearchMatch, SearchRequest, SearchResponse,
     SearchSummary,
 };
 use crate::extraction::ExtractorRegistry;
-use crate::index::{IndexError, IndexedChunkHit, LexicalIndex};
+use crate::index::{IndexError, LexicalIndex};
 use crate::lexical::LexicalVerifier;
 use crate::providers::provider_from_config;
 use crate::runtime::{ConfigStore, RuntimePaths};
@@ -45,7 +45,10 @@ pub fn filter_manifest_documents(
     filter_documents(documents, request)
 }
 
-pub fn rank_documents(mut documents: Vec<DocumentMeta>, request: &SearchRequest) -> Vec<DocumentMeta> {
+pub fn rank_documents(
+    mut documents: Vec<DocumentMeta>,
+    request: &SearchRequest,
+) -> Vec<DocumentMeta> {
     let query_lower = request.query.to_ascii_lowercase();
     documents.sort_by(|left, right| {
         let left_score = ranking_key(left, &query_lower);
@@ -81,7 +84,9 @@ pub fn execute_search(
         .list_corpora()?
         .into_iter()
         .find(|candidate| candidate.id == request.corpus_id.0)
-        .ok_or_else(|| SearchEngineError::InvalidPattern(format!("unknown corpus {}", request.corpus_id.0)))?;
+        .ok_or_else(|| {
+            SearchEngineError::InvalidPattern(format!("unknown corpus {}", request.corpus_id.0))
+        })?;
     let provider = provider_from_config(&corpus.provider)?;
     let manifest = ManifestDb::open(&layout.manifest_db)?;
     let manifest_documents = manifest.list_documents(&request.corpus_id.0)?;
@@ -89,28 +94,20 @@ pub fn execute_search(
     let ranked = rank_documents(filtered, request);
 
     let index_path = layout.index_dir.join("index.db");
-    let index = LexicalIndex::open(&index_path)?;
-    let _ = index.reconcile_manifest(&manifest_documents)?;
-    let index_hits = if request.fixed_strings {
-        index.query_fixed_string(
-            &request.query,
-            request
-                .limit
-                .map(|limit| usize::try_from(limit).unwrap_or(usize::MAX).saturating_mul(8))
-                .unwrap_or(ranked.len()),
-        )?
+    let backend = EmbeddedLexicalBackend::open_if_present(&index_path)?;
+    let backend_candidates = if let Some(backend) = backend.as_ref() {
+        query_backend_candidates(backend, request, ranked.len())?
     } else {
         Vec::new()
     };
-    let candidates = prioritize_index_hits(ranked, &index_hits);
+    let candidates = prioritize_backend_candidates(ranked, &backend_candidates);
 
     execute_search_with_provider_and_index(
         request,
         &corpus,
         provider.as_ref(),
         candidates,
-        &index_hits,
-        Some(&index),
+        &backend_candidates,
     )
 }
 
@@ -120,7 +117,7 @@ pub fn execute_search_with_provider(
     provider: &dyn Provider,
     candidates: Vec<DocumentMeta>,
 ) -> Result<SearchResponse, SearchEngineError> {
-    execute_search_with_provider_and_index(request, _corpus, provider, candidates, &[], None)
+    execute_search_with_provider_and_index(request, _corpus, provider, candidates, &[])
 }
 
 fn execute_search_with_provider_and_index(
@@ -128,18 +125,21 @@ fn execute_search_with_provider_and_index(
     _corpus: &CorpusConfig,
     provider: &dyn Provider,
     candidates: Vec<DocumentMeta>,
-    index_hits: &[IndexedChunkHit],
-    index: Option<&LexicalIndex>,
+    backend_candidates: &[SearchCandidate],
 ) -> Result<SearchResponse, SearchEngineError> {
     let mut verifier = LexicalVerifier::new(request).map_err(|error| match error {
-        crate::lexical::LexicalError::InvalidPattern(message) => SearchEngineError::InvalidPattern(message),
-        crate::lexical::LexicalError::SearchRuntime(message) => SearchEngineError::SearchRuntime(message),
+        crate::lexical::LexicalError::InvalidPattern(message) => {
+            SearchEngineError::InvalidPattern(message)
+        }
+        crate::lexical::LexicalError::SearchRuntime(message) => {
+            SearchEngineError::SearchRuntime(message)
+        }
     })?;
     let mut matches = Vec::new();
     let mut fetched_candidates = 0_u64;
     let mut coverage_counts = CoverageCounts::default();
     let total_candidates = u64::try_from(candidates.len()).unwrap_or_default();
-    let indexed_candidates = unique_indexed_candidate_count(index_hits);
+    let indexed_candidates = unique_backend_candidate_count(backend_candidates);
 
     for document in candidates {
         if !is_extractable_candidate(&document) {
@@ -175,10 +175,6 @@ fn execute_search_with_provider_and_index(
                 continue;
             }
         };
-        if let Some(index) = index {
-            let _ = index.upsert_document(&document, &canonical);
-        }
-
         for chunk in canonical.chunks {
             let Some(snippet) = verifier
                 .first_matching_snippet(&chunk.text)
@@ -237,10 +233,21 @@ fn execute_search_with_provider_and_index(
     })
 }
 
-fn ranking_key(document: &DocumentMeta, query_lower: &str) -> (u8, u8, u64, std::cmp::Reverse<u64>, String) {
+fn ranking_key(
+    document: &DocumentMeta,
+    query_lower: &str,
+) -> (u8, u8, u64, std::cmp::Reverse<u64>, String) {
     let path_lower = document.locator.path.to_ascii_lowercase();
-    let path_matches_query = if path_lower.contains(query_lower) { 0 } else { 1 };
-    let supported_text_rank = if is_extractable_candidate(document) { 0 } else { 1 };
+    let path_matches_query = if path_lower.contains(query_lower) {
+        0
+    } else {
+        1
+    };
+    let supported_text_rank = if is_extractable_candidate(document) {
+        0
+    } else {
+        1
+    };
     let size_rank = document.size_bytes;
     let modified_rank = std::cmp::Reverse(parse_modified_at(document.modified_at.as_deref()));
     (
@@ -252,20 +259,25 @@ fn ranking_key(document: &DocumentMeta, query_lower: &str) -> (u8, u8, u64, std:
     )
 }
 
-fn prioritize_index_hits(candidates: Vec<DocumentMeta>, hits: &[IndexedChunkHit]) -> Vec<DocumentMeta> {
+fn prioritize_backend_candidates(
+    candidates: Vec<DocumentMeta>,
+    hits: &[SearchCandidate],
+) -> Vec<DocumentMeta> {
     let mut preferred = Vec::new();
     let mut seen = HashSet::new();
 
     for hit in hits {
-        seen.insert(hit.document_id.as_str());
+        seen.insert(hit.document_id.0.as_str());
     }
 
     for hit in hits {
         if let Some(document) = candidates
             .iter()
-            .find(|document| document.id.0 == hit.document_id)
+            .find(|document| document.id == hit.document_id)
             .cloned()
-            && !preferred.iter().any(|candidate: &DocumentMeta| candidate.id == document.id)
+            && !preferred
+                .iter()
+                .any(|candidate: &DocumentMeta| candidate.id == document.id)
         {
             preferred.push(document);
         }
@@ -279,12 +291,66 @@ fn prioritize_index_hits(candidates: Vec<DocumentMeta>, hits: &[IndexedChunkHit]
     preferred
 }
 
-fn unique_indexed_candidate_count(hits: &[IndexedChunkHit]) -> u64 {
+fn unique_backend_candidate_count(hits: &[SearchCandidate]) -> u64 {
     let mut documents = HashSet::new();
     for hit in hits {
-        documents.insert(hit.document_id.as_str());
+        documents.insert(hit.document_id.0.as_str());
     }
     u64::try_from(documents.len()).unwrap_or_default()
+}
+
+struct EmbeddedLexicalBackend {
+    index: LexicalIndex,
+}
+
+impl EmbeddedLexicalBackend {
+    fn open_if_present(path: &std::path::Path) -> Result<Option<Self>, SearchEngineError> {
+        if !path.exists() {
+            return Ok(None);
+        }
+        let index = LexicalIndex::open_read_only(path)?;
+        Ok(Some(Self { index }))
+    }
+}
+
+impl SearchBackend for EmbeddedLexicalBackend {
+    fn query(&self, request: &SearchQuerySpec) -> Result<Vec<SearchCandidate>, ContractError> {
+        let hits = self
+            .index
+            .query_fixed_string(&request.query, request.limit.unwrap_or(100) as usize)
+            .map_err(|error| ContractError::Io(error.to_string()))?;
+        Ok(hits
+            .into_iter()
+            .map(|hit| SearchCandidate {
+                document_id: crate::domain::DocumentId(hit.document_id),
+                anchor: None,
+                snippet: Some(hit.snippet),
+                score: Some(hit.score as f32),
+            })
+            .collect())
+    }
+}
+
+fn query_backend_candidates(
+    backend: &dyn SearchBackend,
+    request: &SearchRequest,
+    fallback_limit: usize,
+) -> Result<Vec<SearchCandidate>, SearchEngineError> {
+    if !request.fixed_strings {
+        return Ok(Vec::new());
+    }
+    let limit = request
+        .limit
+        .map(|value| value.saturating_mul(8))
+        .or_else(|| u32::try_from(fallback_limit).ok())
+        .unwrap_or(512);
+    backend
+        .query(&SearchQuerySpec {
+            query: request.query.clone(),
+            limit: Some(limit),
+            path_globs: request.path_globs.clone(),
+        })
+        .map_err(SearchEngineError::Contract)
 }
 
 fn build_glob_matcher(path_globs: &[String]) -> Result<Option<GlobSet>, SearchEngineError> {
@@ -294,7 +360,8 @@ fn build_glob_matcher(path_globs: &[String]) -> Result<Option<GlobSet>, SearchEn
 
     let mut builder = GlobSetBuilder::new();
     for path_glob in path_globs {
-        let glob = Glob::new(path_glob).map_err(|error| SearchEngineError::InvalidGlob(error.to_string()))?;
+        let glob = Glob::new(path_glob)
+            .map_err(|error| SearchEngineError::InvalidGlob(error.to_string()))?;
         builder.add(glob);
     }
 
@@ -305,7 +372,9 @@ fn build_glob_matcher(path_globs: &[String]) -> Result<Option<GlobSet>, SearchEn
 }
 
 fn matches_path_globs(glob_matcher: &Option<GlobSet>, path: &str) -> bool {
-    glob_matcher.as_ref().is_none_or(|matcher| matcher.is_match(path))
+    glob_matcher
+        .as_ref()
+        .is_none_or(|matcher| matcher.is_match(path))
 }
 
 fn matches_extensions(request: &SearchRequest, document: &DocumentMeta) -> bool {
@@ -350,12 +419,18 @@ fn matches_modified_time(request: &SearchRequest, document: &DocumentMeta) -> bo
     };
     let modified_value = Some(parse_modified_at(Some(modified_at)));
     let after_ok = match (request.modified_after.as_deref(), modified_value) {
-        (Some(value), Some(modified)) => value.parse::<u64>().map(|after| modified >= after).unwrap_or(false),
+        (Some(value), Some(modified)) => value
+            .parse::<u64>()
+            .map(|after| modified >= after)
+            .unwrap_or(false),
         (Some(_), None) => false,
         (None, _) => true,
     };
     let before_ok = match (request.modified_before.as_deref(), modified_value) {
-        (Some(value), Some(modified)) => value.parse::<u64>().map(|before| modified <= before).unwrap_or(false),
+        (Some(value), Some(modified)) => value
+            .parse::<u64>()
+            .map(|before| modified <= before)
+            .unwrap_or(false),
         (Some(_), None) => false,
         (None, _) => true,
     };
@@ -364,7 +439,10 @@ fn matches_modified_time(request: &SearchRequest, document: &DocumentMeta) -> bo
 
 fn is_extractable_candidate(document: &DocumentMeta) -> bool {
     if let Some(content_type) = document.content_type.as_deref() {
-        if content_type.starts_with("text/") || content_type == "application/pdf" || content_type == "application/gzip" {
+        if content_type.starts_with("text/")
+            || content_type == "application/pdf"
+            || content_type == "application/gzip"
+        {
             return true;
         }
         if content_type.starts_with("application/vnd.openxmlformats-officedocument") {
@@ -374,7 +452,20 @@ fn is_extractable_candidate(document: &DocumentMeta) -> bool {
 
     matches!(
         document.extension.as_deref(),
-        Some("csv" | "docx" | "gz" | "json" | "log" | "md" | "pdf" | "pptx" | "txt" | "xlsx" | "yaml" | "yml")
+        Some(
+            "csv"
+                | "docx"
+                | "gz"
+                | "json"
+                | "log"
+                | "md"
+                | "pdf"
+                | "pptx"
+                | "txt"
+                | "xlsx"
+                | "yaml"
+                | "yml"
+        )
     )
 }
 
@@ -387,15 +478,14 @@ fn parse_modified_at(modified_at: Option<&str>) -> u64 {
 #[cfg(test)]
 mod tests {
     use crate::config::{CorpusConfig, ProviderConfig};
-    use crate::contracts::{ByteRange, ContractError, Provider, ReadPayload, ResolvedDocument};
-    use crate::domain::{
-        CorpusId, DocumentId, DocumentLocator, SearchOutputFormat, SearchRequest,
+    use crate::contracts::{
+        ByteRange, ContractError, Provider, ReadPayload, ResolvedDocument, SearchCandidate,
     };
-    use crate::index::IndexedChunkHit;
+    use crate::domain::{CorpusId, DocumentId, DocumentLocator, SearchOutputFormat, SearchRequest};
 
     use super::{
         execute_search_with_provider, execute_search_with_provider_and_index, filter_documents,
-        prioritize_index_hits, rank_documents,
+        prioritize_backend_candidates, rank_documents,
     };
 
     fn request() -> SearchRequest {
@@ -499,15 +589,26 @@ mod tests {
     struct TestProvider;
 
     impl Provider for TestProvider {
-        fn list(&self, _prefix: &str, _cursor: Option<&str>) -> Result<crate::contracts::ListPage, ContractError> {
+        fn list(
+            &self,
+            _prefix: &str,
+            _cursor: Option<&str>,
+        ) -> Result<crate::contracts::ListPage, ContractError> {
             Err(ContractError::Unsupported("list not used".to_owned()))
         }
 
-        fn stat(&self, _document_id: &DocumentId) -> Result<crate::domain::DocumentMeta, ContractError> {
+        fn stat(
+            &self,
+            _document_id: &DocumentId,
+        ) -> Result<crate::domain::DocumentMeta, ContractError> {
             Err(ContractError::Unsupported("stat not used".to_owned()))
         }
 
-        fn read(&self, document_id: &DocumentId, _range: Option<ByteRange>) -> Result<ReadPayload, ContractError> {
+        fn read(
+            &self,
+            document_id: &DocumentId,
+            _range: Option<ByteRange>,
+        ) -> Result<ReadPayload, ContractError> {
             match document_id.0.as_str() {
                 "docs/report.txt" => Ok(ReadPayload {
                     bytes: b"riverglass appears here\nanother line".to_vec(),
@@ -612,7 +713,7 @@ mod tests {
     }
 
     #[test]
-    fn prioritize_index_hits_moves_indexed_documents_to_the_front() {
+    fn prioritize_backend_candidates_moves_indexed_documents_to_the_front() {
         let ranked = rank_documents(
             vec![
                 crate::domain::DocumentMeta {
@@ -641,14 +742,13 @@ mod tests {
             &request(),
         );
 
-        let prioritized = prioritize_index_hits(
+        let prioritized = prioritize_backend_candidates(
             ranked,
-            &[IndexedChunkHit {
-                document_id: "docs/beta.txt".to_owned(),
-                path: "docs/beta.txt".to_owned(),
-                anchor_ref: "kind=line_span|path=docs/beta.txt|line_start=1|line_end=1".to_owned(),
-                snippet: "riverglass beta".to_owned(),
-                score: -1.0,
+            &[SearchCandidate {
+                document_id: DocumentId("docs/beta.txt".to_owned()),
+                anchor: None,
+                snippet: Some("riverglass beta".to_owned()),
+                score: Some(-1.0),
             }],
         );
 
@@ -660,21 +760,35 @@ mod tests {
         struct StaleHitProvider;
 
         impl Provider for StaleHitProvider {
-            fn list(&self, _prefix: &str, _cursor: Option<&str>) -> Result<crate::contracts::ListPage, ContractError> {
+            fn list(
+                &self,
+                _prefix: &str,
+                _cursor: Option<&str>,
+            ) -> Result<crate::contracts::ListPage, ContractError> {
                 Err(ContractError::Unsupported("list not used".to_owned()))
             }
 
-            fn stat(&self, _document_id: &DocumentId) -> Result<crate::domain::DocumentMeta, ContractError> {
+            fn stat(
+                &self,
+                _document_id: &DocumentId,
+            ) -> Result<crate::domain::DocumentMeta, ContractError> {
                 Err(ContractError::Unsupported("stat not used".to_owned()))
             }
 
-            fn read(&self, _document_id: &DocumentId, _range: Option<ByteRange>) -> Result<ReadPayload, ContractError> {
+            fn read(
+                &self,
+                _document_id: &DocumentId,
+                _range: Option<ByteRange>,
+            ) -> Result<ReadPayload, ContractError> {
                 Ok(ReadPayload {
                     bytes: b"content changed and no longer matches".to_vec(),
                 })
             }
 
-            fn resolve(&self, _locator: &DocumentLocator) -> Result<ResolvedDocument, ContractError> {
+            fn resolve(
+                &self,
+                _locator: &DocumentLocator,
+            ) -> Result<ResolvedDocument, ContractError> {
                 Err(ContractError::Unsupported("resolve not used".to_owned()))
             }
         }
@@ -703,14 +817,12 @@ mod tests {
                 size_bytes: 42,
                 modified_at: Some("200".to_owned()),
             }],
-            &[IndexedChunkHit {
-                document_id: "docs/report.txt".to_owned(),
-                path: "docs/report.txt".to_owned(),
-                anchor_ref: "kind=line_span|path=docs/report.txt|line_start=1|line_end=1".to_owned(),
-                snippet: "riverglass appears here".to_owned(),
-                score: -1.0,
+            &[SearchCandidate {
+                document_id: DocumentId("docs/report.txt".to_owned()),
+                anchor: None,
+                snippet: Some("riverglass appears here".to_owned()),
+                score: Some(-1.0),
             }],
-            None,
         )
         .unwrap_or_else(|error| panic!("search should execute: {error}"));
 
@@ -723,15 +835,26 @@ mod tests {
         struct CoverageProvider;
 
         impl Provider for CoverageProvider {
-            fn list(&self, _prefix: &str, _cursor: Option<&str>) -> Result<crate::contracts::ListPage, ContractError> {
+            fn list(
+                &self,
+                _prefix: &str,
+                _cursor: Option<&str>,
+            ) -> Result<crate::contracts::ListPage, ContractError> {
                 Err(ContractError::Unsupported("list not used".to_owned()))
             }
 
-            fn stat(&self, _document_id: &DocumentId) -> Result<crate::domain::DocumentMeta, ContractError> {
+            fn stat(
+                &self,
+                _document_id: &DocumentId,
+            ) -> Result<crate::domain::DocumentMeta, ContractError> {
                 Err(ContractError::Unsupported("stat not used".to_owned()))
             }
 
-            fn read(&self, document_id: &DocumentId, _range: Option<ByteRange>) -> Result<ReadPayload, ContractError> {
+            fn read(
+                &self,
+                document_id: &DocumentId,
+                _range: Option<ByteRange>,
+            ) -> Result<ReadPayload, ContractError> {
                 match document_id.0.as_str() {
                     "docs/denied.txt" => Err(ContractError::PermissionDenied("denied".to_owned())),
                     "docs/failure.txt" => Err(ContractError::Transient("throttled".to_owned())),
@@ -741,7 +864,10 @@ mod tests {
                 }
             }
 
-            fn resolve(&self, _locator: &DocumentLocator) -> Result<ResolvedDocument, ContractError> {
+            fn resolve(
+                &self,
+                _locator: &DocumentLocator,
+            ) -> Result<ResolvedDocument, ContractError> {
                 Err(ContractError::Unsupported("resolve not used".to_owned()))
             }
         }
@@ -797,7 +923,10 @@ mod tests {
 
         assert_eq!(response.summary.coverage_counts.denied_count, 1);
         assert_eq!(response.summary.coverage_counts.failure_count, 1);
-        assert!(matches!(response.summary.coverage_status, crate::domain::CoverageStatus::Partial));
+        assert!(matches!(
+            response.summary.coverage_status,
+            crate::domain::CoverageStatus::Partial
+        ));
     }
 
     #[test]
@@ -805,21 +934,35 @@ mod tests {
         struct RegexProvider;
 
         impl Provider for RegexProvider {
-            fn list(&self, _prefix: &str, _cursor: Option<&str>) -> Result<crate::contracts::ListPage, ContractError> {
+            fn list(
+                &self,
+                _prefix: &str,
+                _cursor: Option<&str>,
+            ) -> Result<crate::contracts::ListPage, ContractError> {
                 Err(ContractError::Unsupported("list not used".to_owned()))
             }
 
-            fn stat(&self, _document_id: &DocumentId) -> Result<crate::domain::DocumentMeta, ContractError> {
+            fn stat(
+                &self,
+                _document_id: &DocumentId,
+            ) -> Result<crate::domain::DocumentMeta, ContractError> {
                 Err(ContractError::Unsupported("stat not used".to_owned()))
             }
 
-            fn read(&self, _document_id: &DocumentId, _range: Option<ByteRange>) -> Result<ReadPayload, ContractError> {
+            fn read(
+                &self,
+                _document_id: &DocumentId,
+                _range: Option<ByteRange>,
+            ) -> Result<ReadPayload, ContractError> {
                 Ok(ReadPayload {
                     bytes: b"alpha\nriverglass appears here\nomega".to_vec(),
                 })
             }
 
-            fn resolve(&self, _locator: &DocumentLocator) -> Result<ResolvedDocument, ContractError> {
+            fn resolve(
+                &self,
+                _locator: &DocumentLocator,
+            ) -> Result<ResolvedDocument, ContractError> {
                 Err(ContractError::Unsupported("resolve not used".to_owned()))
             }
         }

@@ -1,0 +1,37 @@
+{
+  "schema_version": "1.0",
+  "case_id": "docx-checklist-anchor-indexed",
+  "suite_id": "tier1-mixed-small",
+  "tier": "tier1",
+  "corpus_id": "tier1.local_fs.mixed_small",
+  "title": "Literal match inside a DOCX paragraph (indexed backend)",
+  "description": "Validate DOCX extraction and chunk-anchor fidelity in the mixed-format small corpus.",
+  "tags": [
+    "docx",
+    "mixed_format",
+    "chunk_anchor"
+  ],
+  "query": {
+    "text": "orchid launch checklist",
+    "syntax": "literal",
+    "case_sensitivity": "smart",
+    "path_globs_include": [
+      "docs/playbooks/**"
+    ],
+    "file_types": [
+      "docx"
+    ],
+    "max_results": 3
+  },
+  "run_mode": {
+    "provider_mode": "local_fs",
+    "manifest_state": "warm",
+    "content_cache_state": "cold",
+    "backend_mode": "enabled"
+  },
+  "expected_results": {
+    "judgment_file": "benchmarks/judgments/tier1/mixed_small.json",
+    "judgment_case_id": "docx-checklist-anchor",
+    "requires_complete_coverage": true
+  }
+}

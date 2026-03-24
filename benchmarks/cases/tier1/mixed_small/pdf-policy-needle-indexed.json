@@ -1,0 +1,37 @@
+{
+  "schema_version": "1.0",
+  "case_id": "pdf-policy-needle-indexed",
+  "suite_id": "tier1-mixed-small",
+  "tier": "tier1",
+  "corpus_id": "tier1.local_fs.mixed_small",
+  "title": "Literal match inside a long PDF (indexed backend)",
+  "description": "Validate PDF extraction, page anchoring, and verified literal matching in the mixed-format small corpus.",
+  "tags": [
+    "pdf",
+    "mixed_format",
+    "literal"
+  ],
+  "query": {
+    "text": "riverglass compliance exception",
+    "syntax": "literal",
+    "case_sensitivity": "smart",
+    "path_globs_include": [
+      "docs/policies/**"
+    ],
+    "file_types": [
+      "pdf"
+    ],
+    "max_results": 3
+  },
+  "run_mode": {
+    "provider_mode": "local_fs",
+    "manifest_state": "warm",
+    "content_cache_state": "cold",
+    "backend_mode": "enabled"
+  },
+  "expected_results": {
+    "judgment_file": "benchmarks/judgments/tier1/mixed_small.json",
+    "judgment_case_id": "pdf-policy-needle",
+    "requires_complete_coverage": true
+  }
+}

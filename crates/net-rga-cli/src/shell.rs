@@ -3,12 +3,16 @@ use std::path::PathBuf;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use net_rga_core::{
     ConfigStore, CorpusConfig, CorpusId, ManifestDb, ProviderConfig, RuntimePaths,
-    SearchOutputFormat, SearchRequest, SearchResponse, StateLayout, execute_search,
-    export_corpus_bundle, import_corpus_bundle, sync_corpus,
+    SearchOutputFormat, SearchRequest, SearchResponse, StateLayout, build_index, clear_index,
+    execute_search, export_corpus_bundle, import_corpus_bundle, index_status, rebuild_index,
+    sync_corpus,
 };
 
 #[derive(Debug, Parser)]
-#[command(name = "net-rga", about = "Provider-agnostic document search with grep-like affordances")]
+#[command(
+    name = "net-rga",
+    about = "Provider-agnostic document search with grep-like affordances"
+)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Commands,
@@ -32,6 +36,7 @@ pub enum Commands {
     Sync(SyncArgs),
     Search(SearchArgs),
     Inspect(InspectArgs),
+    Index(IndexCommand),
     Export(ExportArgs),
     Import(ImportArgs),
 }
@@ -114,6 +119,25 @@ pub struct InspectArgs {
 }
 
 #[derive(Debug, Args)]
+pub struct IndexCommand {
+    #[command(subcommand)]
+    pub command: IndexSubcommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum IndexSubcommand {
+    Build(IndexArgs),
+    Rebuild(IndexArgs),
+    Clear(IndexArgs),
+    Status(IndexArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct IndexArgs {
+    pub corpus: String,
+}
+
+#[derive(Debug, Args)]
 pub struct ExportArgs {
     pub corpus: String,
     pub bundle: String,
@@ -140,6 +164,7 @@ pub fn run(cli: Cli) -> Result<CommandOutcome, String> {
         Commands::Sync(args) => handle_sync(args).map(ok_outcome),
         Commands::Search(args) => handle_search(args),
         Commands::Inspect(args) => handle_inspect(args).map(ok_outcome),
+        Commands::Index(command) => handle_index(command).map(ok_outcome),
         Commands::Export(args) => handle_export(args).map(ok_outcome),
         Commands::Import(args) => handle_import(args).map(ok_outcome),
     }
@@ -200,7 +225,9 @@ fn handle_corpus_list() -> Result<String, String> {
     let lines = corpora
         .into_iter()
         .map(|corpus| match corpus.provider {
-            ProviderConfig::LocalFs { root } => format!("{}\tlocal_fs\t{}", corpus.id, root.display()),
+            ProviderConfig::LocalFs { root } => {
+                format!("{}\tlocal_fs\t{}", corpus.id, root.display())
+            }
             ProviderConfig::S3 {
                 bucket,
                 prefix,
@@ -209,7 +236,10 @@ fn handle_corpus_list() -> Result<String, String> {
             } => {
                 let suffix = prefix.unwrap_or_default();
                 let endpoint_text = endpoint.unwrap_or_else(|| "aws".to_owned());
-                format!("{}\ts3\t{}:{}\t{}", corpus.id, bucket, suffix, endpoint_text)
+                format!(
+                    "{}\ts3\t{}:{}\t{}",
+                    corpus.id, bucket, suffix, endpoint_text
+                )
             }
         })
         .collect::<Vec<_>>();
@@ -272,11 +302,15 @@ fn handle_inspect_with_paths(paths: &RuntimePaths, corpus_id: &str) -> Result<St
         let manifest = ManifestDb::open(&layout.manifest_db).map_err(|error| error.to_string())?;
         lines.push(format!(
             "documents={}",
-            manifest.document_count(&corpus.id).map_err(|error| error.to_string())?
+            manifest
+                .document_count(&corpus.id)
+                .map_err(|error| error.to_string())?
         ));
         lines.push(format!(
             "tombstones={}",
-            manifest.tombstone_count(&corpus.id).map_err(|error| error.to_string())?
+            manifest
+                .tombstone_count(&corpus.id)
+                .map_err(|error| error.to_string())?
         ));
         lines.push(format!(
             "failures={}",
@@ -302,13 +336,111 @@ fn handle_inspect_with_paths(paths: &RuntimePaths, corpus_id: &str) -> Result<St
         lines.push("documents=unsynced".to_owned());
     }
 
+    let index_health = index_status(paths, corpus_id).map_err(|error| error.to_string())?;
+    lines.push(format!("index_present={}", index_health.present));
     lines.push(format!(
-        "index_present={}",
-        layout.index_dir.join("index.db").exists()
+        "index_schema_version={}",
+        index_health
+            .schema_version
+            .unwrap_or_else(|| "-".to_owned())
+    ));
+    lines.push(format!(
+        "index_update_strategy={}",
+        index_health
+            .update_strategy
+            .unwrap_or_else(|| "-".to_owned())
+    ));
+    lines.push(format!(
+        "index_backend={}",
+        index_health.backend_kind.unwrap_or_else(|| "-".to_owned())
+    ));
+    lines.push(format!(
+        "index_documents={}",
+        index_health.indexed_documents
+    ));
+    lines.push(format!(
+        "index_last_build_started_at={}",
+        index_health
+            .last_build_started_at
+            .unwrap_or_else(|| "-".to_owned())
+    ));
+    lines.push(format!(
+        "index_last_build_completed_at={}",
+        index_health
+            .last_build_completed_at
+            .unwrap_or_else(|| "-".to_owned())
     ));
     lines.push(format!("cache_present={}", layout.cache_dir.exists()));
 
     Ok(lines.join("\n"))
+}
+
+fn handle_index(command: IndexCommand) -> Result<String, String> {
+    let paths = RuntimePaths::from_env().map_err(|error| error.to_string())?;
+    let store = ConfigStore::new(paths.clone());
+    let corpus = match command.command {
+        IndexSubcommand::Build(ref args)
+        | IndexSubcommand::Rebuild(ref args)
+        | IndexSubcommand::Clear(ref args)
+        | IndexSubcommand::Status(ref args) => store
+            .list_corpora()
+            .map_err(|error| error.to_string())?
+            .into_iter()
+            .find(|candidate| candidate.id == args.corpus)
+            .ok_or_else(|| format!("unknown corpus {}", args.corpus))?,
+    };
+    match command.command {
+        IndexSubcommand::Build(args) => {
+            let provider = net_rga_core::providers::provider_from_config(&corpus.provider)
+                .map_err(|error| error.to_string())?;
+            let summary = build_index(&paths, &args.corpus, provider.as_ref())
+                .map_err(|error| error.to_string())?;
+            Ok(format!(
+                "index build {}\tindexed={}\tfailed={}\tstarted_at={}\tcompleted_at={}",
+                args.corpus,
+                summary.indexed_documents,
+                summary.failed_documents,
+                summary.last_build_started_at,
+                summary.last_build_completed_at
+            ))
+        }
+        IndexSubcommand::Rebuild(args) => {
+            let provider = net_rga_core::providers::provider_from_config(&corpus.provider)
+                .map_err(|error| error.to_string())?;
+            let summary = rebuild_index(&paths, &args.corpus, provider.as_ref())
+                .map_err(|error| error.to_string())?;
+            Ok(format!(
+                "index rebuild {}\tindexed={}\tfailed={}\tstarted_at={}\tcompleted_at={}",
+                args.corpus,
+                summary.indexed_documents,
+                summary.failed_documents,
+                summary.last_build_started_at,
+                summary.last_build_completed_at
+            ))
+        }
+        IndexSubcommand::Clear(args) => {
+            let removed = clear_index(&paths, &args.corpus).map_err(|error| error.to_string())?;
+            Ok(format!("index clear {}\tremoved={}", args.corpus, removed))
+        }
+        IndexSubcommand::Status(args) => {
+            let status = index_status(&paths, &args.corpus).map_err(|error| error.to_string())?;
+            Ok(format!(
+                "index status {}\tpresent={}\tschema_version={}\tupdate_strategy={}\tbackend={}\tindexed_documents={}\tlast_build_started_at={}\tlast_build_completed_at={}",
+                args.corpus,
+                status.present,
+                status.schema_version.unwrap_or_else(|| "-".to_owned()),
+                status.update_strategy.unwrap_or_else(|| "-".to_owned()),
+                status.backend_kind.unwrap_or_else(|| "-".to_owned()),
+                status.indexed_documents,
+                status
+                    .last_build_started_at
+                    .unwrap_or_else(|| "-".to_owned()),
+                status
+                    .last_build_completed_at
+                    .unwrap_or_else(|| "-".to_owned())
+            ))
+        }
+    }
 }
 
 fn handle_export(args: ExportArgs) -> Result<String, String> {
@@ -326,8 +458,8 @@ fn handle_export(args: ExportArgs) -> Result<String, String> {
 
 fn handle_import(args: ImportArgs) -> Result<String, String> {
     let paths = RuntimePaths::from_env().map_err(|error| error.to_string())?;
-    let manifest =
-        import_corpus_bundle(&paths, &PathBuf::from(&args.bundle)).map_err(|error| error.to_string())?;
+    let manifest = import_corpus_bundle(&paths, &PathBuf::from(&args.bundle))
+        .map_err(|error| error.to_string())?;
     Ok(format!(
         "imported {}\tbundle={}\tindex={}\tcache={}",
         manifest.corpus.id,
@@ -420,7 +552,10 @@ fn render_match_lines(response: &SearchResponse) -> Vec<String> {
 }
 
 fn render_partial_notice(response: &SearchResponse) -> Option<String> {
-    if !matches!(response.summary.coverage_status, net_rga_core::CoverageStatus::Partial) {
+    if !matches!(
+        response.summary.coverage_status,
+        net_rga_core::CoverageStatus::Partial
+    ) {
         return None;
     }
 
@@ -464,7 +599,10 @@ fn render_stats_lines(response: &SearchResponse) -> Vec<String> {
         format!("{} verified matches", response.summary.verified_matches),
         format!("{} matched anchors", response.matches.len()),
         format!("{matched_documents} documents contained matches"),
-        format!("{} candidates considered", response.summary.total_candidates),
+        format!(
+            "{} candidates considered",
+            response.summary.total_candidates
+        ),
         format!("{} candidates fetched", response.summary.fetched_candidates),
         format!("{} indexed candidates", response.summary.indexed_candidates),
         format!("coverage: {coverage}"),
@@ -496,26 +634,33 @@ fn render_verbose_summary(response: &SearchResponse) -> String {
     )
 }
 
-fn render_search_output(response: &SearchResponse, render_options: &SearchRenderOptions) -> Result<String, String> {
+fn render_search_output(
+    response: &SearchResponse,
+    render_options: &SearchRenderOptions,
+) -> Result<String, String> {
     match response.request.output_format {
         SearchOutputFormat::Text => Ok(render_search_text(response, render_options)),
-        SearchOutputFormat::Json => serde_json::to_string_pretty(response).map_err(|error| error.to_string()),
+        SearchOutputFormat::Json => {
+            serde_json::to_string_pretty(response).map_err(|error| error.to_string())
+        }
     }
 }
 
 fn search_exit_code(response: &SearchResponse) -> u8 {
-    if matches!(response.summary.coverage_status, net_rga_core::CoverageStatus::Partial) {
+    if matches!(
+        response.summary.coverage_status,
+        net_rga_core::CoverageStatus::Partial
+    ) {
         return 3;
     }
-    if response.matches.is_empty() {
-        1
-    } else {
-        0
-    }
+    if response.matches.is_empty() { 1 } else { 0 }
 }
 
 fn ok_outcome(output: String) -> CommandOutcome {
-    CommandOutcome { output, exit_code: 0 }
+    CommandOutcome {
+        output,
+        exit_code: 0,
+    }
 }
 
 fn provider_label(provider: &ProviderConfig) -> &'static str {
@@ -545,7 +690,9 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use net_rga_core::{ConfigStore, CorpusConfig, ProviderConfig, RuntimePaths, SearchOutputFormat};
+    use net_rga_core::{
+        ConfigStore, CorpusConfig, ProviderConfig, RuntimePaths, SearchOutputFormat,
+    };
 
     use super::{
         Cli, Commands, CorpusSubcommand, SearchRenderOptions, build_search_render_options,
@@ -607,8 +754,11 @@ mod tests {
         let corpus_root = state_root.join("fixtures");
         fs::create_dir_all(corpus_root.join("docs"))
             .unwrap_or_else(|error| panic!("fixture dir should create: {error}"));
-        fs::write(corpus_root.join("docs/report.txt"), "riverglass appears here\nother line")
-            .unwrap_or_else(|error| panic!("fixture should write: {error}"));
+        fs::write(
+            corpus_root.join("docs/report.txt"),
+            "riverglass appears here\nother line",
+        )
+        .unwrap_or_else(|error| panic!("fixture should write: {error}"));
 
         let paths = RuntimePaths::from_state_root(state_root.clone());
         let store = ConfigStore::new(paths.clone());
@@ -646,8 +796,11 @@ mod tests {
         let corpus_root = state_root.join("fixtures");
         fs::create_dir_all(corpus_root.join("docs"))
             .unwrap_or_else(|error| panic!("fixture dir should create: {error}"));
-        fs::write(corpus_root.join("docs/report.txt"), "riverglass appears here")
-            .unwrap_or_else(|error| panic!("fixture should write: {error}"));
+        fs::write(
+            corpus_root.join("docs/report.txt"),
+            "riverglass appears here",
+        )
+        .unwrap_or_else(|error| panic!("fixture should write: {error}"));
 
         let paths = RuntimePaths::from_state_root(state_root.clone());
         let store = ConfigStore::new(paths.clone());
@@ -709,7 +862,10 @@ mod tests {
         ]);
 
         let (request, render_options) = match cli.command {
-            Commands::Search(args) => (build_search_request(&args), build_search_render_options(&args)),
+            Commands::Search(args) => (
+                build_search_request(&args),
+                build_search_render_options(&args),
+            ),
             _ => panic!("expected search command"),
         };
 
@@ -747,8 +903,9 @@ mod tests {
             })
             .unwrap_or_else(|error| panic!("corpus should save: {error}"));
 
-        let output = handle_sync_with_paths(&RuntimePaths::from_state_root(state_root.clone()), "local")
-            .unwrap_or_else(|error| panic!("sync should succeed: {error}"));
+        let output =
+            handle_sync_with_paths(&RuntimePaths::from_state_root(state_root.clone()), "local")
+                .unwrap_or_else(|error| panic!("sync should succeed: {error}"));
         assert!(output.contains("synced local"));
         fs::remove_dir_all(state_root).ok();
     }
@@ -801,8 +958,11 @@ mod tests {
             .unwrap_or_else(|error| panic!("fixture dir should create: {error}"));
         fs::create_dir_all(corpus_root.join("media"))
             .unwrap_or_else(|error| panic!("fixture dir should create: {error}"));
-        fs::write(corpus_root.join("docs/report.txt"), "riverglass appears here")
-            .unwrap_or_else(|error| panic!("fixture should write: {error}"));
+        fs::write(
+            corpus_root.join("docs/report.txt"),
+            "riverglass appears here",
+        )
+        .unwrap_or_else(|error| panic!("fixture should write: {error}"));
         fs::write(corpus_root.join("media/video.mp4"), b"binary-data")
             .unwrap_or_else(|error| panic!("fixture should write: {error}"));
 
@@ -843,8 +1003,11 @@ mod tests {
         let corpus_root = state_root.join("fixtures");
         fs::create_dir_all(corpus_root.join("docs"))
             .unwrap_or_else(|error| panic!("fixture dir should create: {error}"));
-        fs::write(corpus_root.join("docs/report.txt"), "riverglass appears here")
-            .unwrap_or_else(|error| panic!("fixture should write: {error}"));
+        fs::write(
+            corpus_root.join("docs/report.txt"),
+            "riverglass appears here",
+        )
+        .unwrap_or_else(|error| panic!("fixture should write: {error}"));
 
         let paths = RuntimePaths::from_state_root(state_root.clone());
         let store = ConfigStore::new(paths.clone());
@@ -865,7 +1028,10 @@ mod tests {
 
         let cli = Cli::parse_from(["net-rga", "search", "riverglass", "local", "--stats"]);
         let (request, render_options) = match cli.command {
-            Commands::Search(args) => (build_search_request(&args), build_search_render_options(&args)),
+            Commands::Search(args) => (
+                build_search_request(&args),
+                build_search_render_options(&args),
+            ),
             _ => panic!("expected search command"),
         };
         let outcome = handle_search_with_paths(&paths, &request, &render_options)
@@ -884,8 +1050,11 @@ mod tests {
         let corpus_root = state_root.join("fixtures");
         fs::create_dir_all(corpus_root.join("docs"))
             .unwrap_or_else(|error| panic!("fixture dir should create: {error}"));
-        fs::write(corpus_root.join("docs/report.txt"), "riverglass appears here")
-            .unwrap_or_else(|error| panic!("fixture should write: {error}"));
+        fs::write(
+            corpus_root.join("docs/report.txt"),
+            "riverglass appears here",
+        )
+        .unwrap_or_else(|error| panic!("fixture should write: {error}"));
 
         let paths = RuntimePaths::from_state_root(state_root.clone());
         let store = ConfigStore::new(paths.clone());
@@ -906,7 +1075,10 @@ mod tests {
 
         let cli = Cli::parse_from(["net-rga", "search", "riverglass", "local", "--verbose"]);
         let (request, render_options) = match cli.command {
-            Commands::Search(args) => (build_search_request(&args), build_search_render_options(&args)),
+            Commands::Search(args) => (
+                build_search_request(&args),
+                build_search_render_options(&args),
+            ),
             _ => panic!("expected search command"),
         };
         let outcome = handle_search_with_paths(&paths, &request, &render_options)
@@ -923,8 +1095,11 @@ mod tests {
         let corpus_root = state_root.join("fixtures");
         fs::create_dir_all(corpus_root.join("docs"))
             .unwrap_or_else(|error| panic!("fixture dir should create: {error}"));
-        fs::write(corpus_root.join("docs/report.txt"), "riverglass appears here")
-            .unwrap_or_else(|error| panic!("fixture should write: {error}"));
+        fs::write(
+            corpus_root.join("docs/report.txt"),
+            "riverglass appears here",
+        )
+        .unwrap_or_else(|error| panic!("fixture should write: {error}"));
 
         let paths = RuntimePaths::from_state_root(state_root.clone());
         let store = ConfigStore::new(paths.clone());
@@ -944,7 +1119,7 @@ mod tests {
             .unwrap_or_else(|error| panic!("sync should succeed: {error}"));
 
         let output = handle_inspect_with_paths(&paths, "local")
-        .unwrap_or_else(|error| panic!("inspect should succeed: {error}"));
+            .unwrap_or_else(|error| panic!("inspect should succeed: {error}"));
 
         assert!(output.contains("corpus=local"));
         assert!(output.contains("provider=local_fs"));

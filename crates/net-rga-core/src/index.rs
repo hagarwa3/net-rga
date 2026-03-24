@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -75,17 +75,25 @@ impl LexicalIndex {
         let connection = Connection::open(path)?;
         connection.execute_batch(INDEX_SCHEMA_V1)?;
         let index = Self { connection };
-        index.write_meta("schema_version", INDEX_SCHEMA_VERSION)?;
-        index.write_meta("update_strategy", IndexUpdateStrategy::OnReadVerify.as_str())?;
+        index.write_health_metadata("schema_version", INDEX_SCHEMA_VERSION)?;
+        index.write_health_metadata(
+            "update_strategy",
+            IndexUpdateStrategy::OnReadVerify.as_str(),
+        )?;
         Ok(index)
     }
 
+    pub fn open_read_only(path: &Path) -> Result<Self, IndexError> {
+        let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        Ok(Self { connection })
+    }
+
     pub fn schema_version(&self) -> Result<Option<String>, IndexError> {
-        self.read_meta("schema_version")
+        self.read_health_metadata("schema_version")
     }
 
     pub fn update_strategy(&self) -> Result<Option<String>, IndexError> {
-        self.read_meta("update_strategy")
+        self.read_health_metadata("update_strategy")
     }
 
     pub fn upsert_document(
@@ -117,12 +125,7 @@ impl LexicalIndex {
             transaction.execute(
                 "INSERT INTO indexed_chunks (document_id, path, anchor_ref, snippet)
                  VALUES (?1, ?2, ?3, ?4)",
-                params![
-                    meta.id.0,
-                    meta.locator.path,
-                    chunk.anchor_ref,
-                    chunk.text,
-                ],
+                params![meta.id.0, meta.locator.path, chunk.anchor_ref, chunk.text,],
             )?;
         }
         transaction.commit()?;
@@ -141,7 +144,10 @@ impl LexicalIndex {
         Ok(())
     }
 
-    pub fn reconcile_manifest(&self, manifest_documents: &[DocumentMeta]) -> Result<u64, IndexError> {
+    pub fn reconcile_manifest(
+        &self,
+        manifest_documents: &[DocumentMeta],
+    ) -> Result<u64, IndexError> {
         let manifest_versions = manifest_documents
             .iter()
             .map(|document| (document.id.0.clone(), document.version.clone()))
@@ -166,6 +172,14 @@ impl LexicalIndex {
         Ok(removed)
     }
 
+    pub fn indexed_document_count(&self) -> Result<u64, IndexError> {
+        Ok(self
+            .connection
+            .query_row("SELECT COUNT(*) FROM indexed_documents", [], |row| {
+                row.get(0)
+            })?)
+    }
+
     pub fn query_fixed_string(
         &self,
         query: &str,
@@ -182,15 +196,18 @@ impl LexicalIndex {
              ORDER BY bm25(indexed_chunks)
              LIMIT ?2",
         )?;
-        let rows = statement.query_map(params![phrase, i64::try_from(limit).unwrap_or(i64::MAX)], |row| {
-            Ok(IndexedChunkHit {
-                document_id: row.get(0)?,
-                path: row.get(1)?,
-                anchor_ref: row.get(2)?,
-                snippet: row.get(3)?,
-                score: row.get(4)?,
-            })
-        })?;
+        let rows = statement.query_map(
+            params![phrase, i64::try_from(limit).unwrap_or(i64::MAX)],
+            |row| {
+                Ok(IndexedChunkHit {
+                    document_id: row.get(0)?,
+                    path: row.get(1)?,
+                    anchor_ref: row.get(2)?,
+                    snippet: row.get(3)?,
+                    score: row.get(4)?,
+                })
+            },
+        )?;
 
         let mut hits = Vec::new();
         for row in rows {
@@ -199,7 +216,7 @@ impl LexicalIndex {
         Ok(hits)
     }
 
-    fn read_meta(&self, key: &str) -> Result<Option<String>, IndexError> {
+    pub fn read_health_metadata(&self, key: &str) -> Result<Option<String>, IndexError> {
         Ok(self
             .connection
             .query_row(
@@ -210,7 +227,7 @@ impl LexicalIndex {
             .optional()?)
     }
 
-    fn write_meta(&self, key: &str, value: &str) -> Result<(), IndexError> {
+    pub fn write_health_metadata(&self, key: &str, value: &str) -> Result<(), IndexError> {
         self.connection.execute(
             "INSERT INTO index_meta (key, value) VALUES (?1, ?2)
              ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -251,10 +268,13 @@ mod tests {
     #[test]
     fn lexical_index_persists_schema_and_update_strategy() {
         let path = temp_index_path();
-        let index = LexicalIndex::open(&path)
-            .unwrap_or_else(|error| panic!("index should open: {error}"));
+        let index =
+            LexicalIndex::open(&path).unwrap_or_else(|error| panic!("index should open: {error}"));
 
-        assert_eq!(index.schema_version().unwrap_or_default().as_deref(), Some(INDEX_SCHEMA_VERSION));
+        assert_eq!(
+            index.schema_version().unwrap_or_default().as_deref(),
+            Some(INDEX_SCHEMA_VERSION)
+        );
         assert_eq!(
             index.update_strategy().unwrap_or_default().as_deref(),
             Some(IndexUpdateStrategy::OnReadVerify.as_str())
@@ -266,8 +286,8 @@ mod tests {
     #[test]
     fn lexical_index_upserts_and_queries_verified_chunks() {
         let path = temp_index_path();
-        let index = LexicalIndex::open(&path)
-            .unwrap_or_else(|error| panic!("index should open: {error}"));
+        let index =
+            LexicalIndex::open(&path).unwrap_or_else(|error| panic!("index should open: {error}"));
         let meta = document_meta("docs/report.txt", Some("v1"));
         let canonical = canonical_document("docs/report.txt", "riverglass appears here");
 
@@ -288,8 +308,8 @@ mod tests {
     #[test]
     fn lexical_index_reconciles_stale_versions_against_manifest() {
         let path = temp_index_path();
-        let index = LexicalIndex::open(&path)
-            .unwrap_or_else(|error| panic!("index should open: {error}"));
+        let index =
+            LexicalIndex::open(&path).unwrap_or_else(|error| panic!("index should open: {error}"));
         let meta = document_meta("docs/report.txt", Some("v1"));
         let canonical = canonical_document("docs/report.txt", "riverglass appears here");
         index
