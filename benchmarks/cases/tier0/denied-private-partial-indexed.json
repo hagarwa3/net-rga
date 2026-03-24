@@ -1,0 +1,30 @@
+{
+  "schema_version": "1.0",
+  "case_id": "denied-private-partial-indexed",
+  "suite_id": "tier0-golden",
+  "tier": "tier0",
+  "corpus_id": "tier0.local_fs",
+  "title": "Permission-denied file should produce partial coverage (indexed backend)",
+  "description": "Search for the private marker token after a mutation revokes read access to the private fixture.",
+  "query": {
+    "text": "nebula-flag",
+    "syntax": "literal",
+    "case_sensitivity": "smart",
+    "path_globs_include": [
+      "docs/private/**"
+    ],
+    "max_results": 5
+  },
+  "run_mode": {
+    "provider_mode": "local_fs",
+    "manifest_state": "warm",
+    "content_cache_state": "not_applicable",
+    "backend_mode": "enabled",
+    "mutation_set_id": "revoke_private_secret"
+  },
+  "expected_results": {
+    "judgment_file": "benchmarks/judgments/tier0/local_fs_golden.json",
+    "judgment_case_id": "denied-private-partial",
+    "requires_complete_coverage": false
+  }
+}

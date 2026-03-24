@@ -1,0 +1,29 @@
+{
+  "schema_version": "1.0",
+  "case_id": "unsupported-media-partial-indexed",
+  "suite_id": "tier0-golden",
+  "tier": "tier0",
+  "corpus_id": "tier0.local_fs",
+  "title": "Unsupported media should produce partial coverage, not false positives (indexed backend)",
+  "description": "Search within the media subtree for a token that only exists in an unsupported placeholder media file.",
+  "query": {
+    "text": "FAKE_MP4_BINARY_PLACEHOLDER",
+    "syntax": "literal",
+    "case_sensitivity": "sensitive",
+    "path_globs_include": [
+      "media/**"
+    ],
+    "max_results": 5
+  },
+  "run_mode": {
+    "provider_mode": "local_fs",
+    "manifest_state": "warm",
+    "content_cache_state": "not_applicable",
+    "backend_mode": "enabled"
+  },
+  "expected_results": {
+    "judgment_file": "benchmarks/judgments/tier0/local_fs_golden.json",
+    "judgment_case_id": "unsupported-media-partial",
+    "requires_complete_coverage": false
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "schema_version": "1.0",
+  "case_id": "report-orchid-path-indexed",
+  "suite_id": "tier0-golden",
+  "tier": "tier0",
+  "corpus_id": "tier0.local_fs",
+  "title": "Path-filtered search in reports subtree (indexed backend)",
+  "description": "Search for Project Orchid while constraining the query to the reports path.",
+  "query": {
+    "text": "Project Orchid",
+    "syntax": "literal",
+    "case_sensitivity": "smart",
+    "path_globs_include": [
+      "docs/reports/**"
+    ],
+    "max_results": 5
+  },
+  "run_mode": {
+    "provider_mode": "local_fs",
+    "manifest_state": "warm",
+    "content_cache_state": "not_applicable",
+    "backend_mode": "enabled"
+  },
+  "expected_results": {
+    "judgment_file": "benchmarks/judgments/tier0/local_fs_golden.json",
+    "judgment_case_id": "report-orchid-path",
+    "requires_complete_coverage": true
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "schema_version": "1.0",
+  "case_id": "spreadsheet-operations-row-indexed",
+  "suite_id": "tier0-golden",
+  "tier": "tier0",
+  "corpus_id": "tier0.local_fs",
+  "title": "Structured text row match in spreadsheet fixture (indexed backend)",
+  "description": "Search for the operations budget row in the CSV spreadsheet fixture.",
+  "query": {
+    "text": "operations",
+    "syntax": "literal",
+    "case_sensitivity": "smart",
+    "path_globs_include": [
+      "docs/spreadsheets/**"
+    ],
+    "file_types": [
+      "csv"
+    ],
+    "max_results": 5
+  },
+  "run_mode": {
+    "provider_mode": "local_fs",
+    "manifest_state": "warm",
+    "content_cache_state": "not_applicable",
+    "backend_mode": "enabled"
+  },
+  "expected_results": {
+    "judgment_file": "benchmarks/judgments/tier0/local_fs_golden.json",
+    "judgment_case_id": "spreadsheet-operations-row",
+    "requires_complete_coverage": true
+  }
+}
