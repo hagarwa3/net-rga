@@ -21,6 +21,8 @@ Net-RGA is a provider-agnostic document search CLI that aims to preserve a grep-
 | Search backends | Optional pluggable capability, not a v0 requirement |
 | Current local search backend | Embedded SQLite FTS5 lexical index sidecar |
 | Hosted search backend path | Future `SearchBackend` implementation; must not replace final verification |
+| Index freshness model | Base index artifact plus incremental local overlay plus final verification |
+| Index fallback policy | Fail loud or report explicitly when acceleration is missing, incompatible, or stale enough to change expectations |
 | Local runtime config | `rc`-style local config for corpora, credentials references, defaults, and backend bindings |
 | Results policy | Anchor-native internals with grep-like output and explicit coverage reporting |
 | Core lexical engine policy | Reuse ripgrep crates/tools for traversal, matching, and rendering where practical instead of reimplementing grep internals |
@@ -138,6 +140,12 @@ The system should enable these concrete outcomes in v0:
 - Future CLI extensions such as `open`, `explain`, `delta`, `prefetch`, and `sem`
 - Policy-aware or tenant-shared bundle distribution
 
+### Indexing milestone boundary
+
+- V0: opportunistic local sidecar updates on verified reads
+- V0.5 / next milestone: explicit `index build` and `index rebuild` lifecycle plus planner/backend abstraction
+- V1: layered index metadata, explainability, staleness semantics, and hosted-backend interchangeability
+
 ## System Architecture
 
 ### Ripgrep/rga reuse boundary
@@ -147,6 +155,12 @@ Net-RGA should not treat grep internals as a greenfield problem. The project sho
 - use ripgrep-adjacent crates such as `ignore`, `globset`, and the `grep-*` family for local traversal, filtering, lexical matching, and grep-like rendering when those fit the execution path
 - use `rga`-style preprocessing or external extractor tools where they are the pragmatic way to turn provider bytes into canonical searchable text
 - avoid custom regex engines, custom line scanners, custom ignore walkers, and custom snippet selection logic unless the cloud/document problem truly requires it
+
+Do-not-rebuild list unless forced by an unsolved cloud/document requirement:
+
+- regex engine behavior
+- ignore walker semantics
+- line and snippet search internals
 
 The custom part of Net-RGA should stay focused on:
 
@@ -168,6 +182,18 @@ Net-RGA is a hybrid local/remote document search engine:
 4. A query planner narrows candidates using the manifest and optional search backends.
 5. A fetch/verify stage retrieves only the candidates needed to prove lexical matches.
 6. Results are emitted as anchor-backed snippets with grep-like rendering and explicit coverage metadata.
+
+### Index layering policy
+
+The index stack should be layered explicitly so local portability and hosted backends can coexist without confusing search truth:
+
+- Layer A: manifest/catalog is the canonical namespace and sync truth
+- Layer B: base lexical accelerator artifact is portable and bundleable
+- Layer C: mutable local overlay index absorbs post-build or post-import changes
+- Layer D: fetch/verify remains final lexical truth for reported matches
+- Layer E: coverage accounting explains partiality causes and accelerator degradation
+
+This means Net-RGA should never let index state silently replace manifest truth or final verification truth.
 
 ### Subsystem map
 
@@ -405,6 +431,12 @@ Each corpus should be representable by a stable local directory layout:
 
 The next implementation step should move the embedded local index behind the `SearchBackend` seam so local and hosted backends share the same planner contract.
 
+Planned layering:
+
+- base artifact: portable lexical index data that can be bundled or restored
+- local overlay: mutable per-machine updates after import, sync drift, or verification-time learning
+- planner view: merged candidate surface across base artifact, overlay, and manifest truth
+
 The same bundle model should be able to grow to include portable backend artifacts later without changing the role of `manifest.db` as the canonical sync record.
 
 The manifest must remain valid and useful even when neither sidecar exists.
@@ -456,6 +488,16 @@ A search is `partial` when any candidate subset could not be fully resolved due 
   - match found
   - no match found with complete coverage
   - no match found with partial coverage
+
+### Index and acceleration failure semantics matrix
+
+| Situation | Planner behavior | User-visible behavior |
+| --- | --- | --- |
+| Index missing | Fall back to manifest-plus-fetch path | Search remains correct; acceleration absence may be surfaced in stats, verbose output, or inspect |
+| Index incompatible | Refuse to trust the index and fall back or require rebuild | Explicit warning or error; never silently use incompatible accelerator artifacts |
+| Index stale vs manifest | Treat stale entries as advisory at most and prefer manifest truth | Explicit stale reporting when it affects confidence or candidate expectation |
+| Deleted / denied / unsupported candidates | Keep verification authoritative and coverage partial when unresolved | Counters must surface deleted, denied, unsupported, and stale causes separately |
+| Verification failure after indexed hit | Drop speculative hit and preserve final verification truth | No unverified match output; partial coverage or failure reporting if applicable |
 
 ## Technology Choices For V0
 
