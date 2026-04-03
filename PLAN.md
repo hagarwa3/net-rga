@@ -142,8 +142,8 @@ The system should enable these concrete outcomes in v0:
 
 ### Indexing milestone boundary
 
-- V0: opportunistic local sidecar updates on verified reads
-- V0.5 / next milestone: explicit `index build` and `index rebuild` lifecycle plus planner/backend abstraction
+- V0: optional embedded local sidecar introduced as a local accelerator
+- Phase 7 / current milestone: explicit `index build` and `index rebuild` lifecycle plus planner/backend abstraction
 - V1: layered index metadata, explainability, staleness semantics, and hosted-backend interchangeability
 
 ## System Architecture
@@ -857,12 +857,12 @@ Acceptance criteria:
 
 Checklist:
 
-- [ ] Add `index build` command
-- [ ] Add `index rebuild` command
-- [ ] Add `index clear` command
-- [ ] Add `index status` command
-- [ ] Refactor the current SQLite FTS index into a `SearchBackend` implementation
-- [ ] Store index health and last-build metadata for `inspect`
+- [x] Add `index build` command
+- [x] Add `index rebuild` command
+- [x] Add `index clear` command
+- [x] Add `index status` command
+- [x] Refactor the current SQLite FTS index into a `SearchBackend` implementation
+- [x] Store index health and last-build metadata for `inspect`
 - [ ] Add indexed vs unindexed benchmark runs to Tier 0 and Tier 1
 
 ### Phase 8: Hosted backend prototype

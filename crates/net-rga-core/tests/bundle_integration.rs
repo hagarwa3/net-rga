@@ -5,7 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use net_rga_core::{
     ConfigStore, CorpusConfig, CorpusId, ManifestDb, ProviderConfig, RuntimePaths,
-    SearchOutputFormat, SearchRequest, execute_search, export_corpus_bundle,
+    SearchOutputFormat, SearchRequest, build_index, execute_search, export_corpus_bundle,
     import_corpus_bundle, sync_corpus,
 };
 
@@ -16,7 +16,11 @@ fn bundle_restore_bootstraps_clean_environment_with_search_ready_state() {
     let corpus_root = temp_dir("net-rga-bundle-corpus");
     let bundle_root = temp_dir("net-rga-bundle-output");
 
-    write_fixture(&corpus_root, "docs/report.txt", "riverglass appears here\nsecond line");
+    write_fixture(
+        &corpus_root,
+        "docs/report.txt",
+        "riverglass appears here\nsecond line",
+    );
 
     let source_paths = RuntimePaths::from_state_root(source_state_root.clone());
     let source_store = ConfigStore::new(source_paths.clone());
@@ -33,7 +37,14 @@ fn bundle_restore_bootstraps_clean_environment_with_search_ready_state() {
         })
         .unwrap_or_else(|error| panic!("source corpus should save: {error}"));
 
-    sync_corpus(&source_paths, "local").unwrap_or_else(|error| panic!("source sync should succeed: {error}"));
+    sync_corpus(&source_paths, "local")
+        .unwrap_or_else(|error| panic!("source sync should succeed: {error}"));
+    let provider = net_rga_core::providers::provider_from_config(&ProviderConfig::LocalFs {
+        root: corpus_root.clone(),
+    })
+    .unwrap_or_else(|error| panic!("local provider should build: {error}"));
+    build_index(&source_paths, "local", provider.as_ref())
+        .unwrap_or_else(|error| panic!("source index build should succeed: {error}"));
     let first_response = execute_search(
         &source_paths,
         &SearchRequest {
@@ -54,6 +65,7 @@ fn bundle_restore_bootstraps_clean_environment_with_search_ready_state() {
     .unwrap_or_else(|error| panic!("source search should succeed: {error}"));
 
     assert_eq!(first_response.matches.len(), 1);
+    assert!(first_response.summary.indexed_candidates >= 1);
 
     export_corpus_bundle(&source_paths, "local", &bundle_root)
         .unwrap_or_else(|error| panic!("bundle export should succeed: {error}"));
@@ -69,10 +81,8 @@ fn bundle_restore_bootstraps_clean_environment_with_search_ready_state() {
     assert_eq!(imported_corpora.len(), 1);
     assert_eq!(imported_corpora[0].id, "local");
 
-    let imported_layout = net_rga_core::StateLayout::for_corpus(
-        &imported_state_root,
-        &CorpusId("local".to_owned()),
-    );
+    let imported_layout =
+        net_rga_core::StateLayout::for_corpus(&imported_state_root, &CorpusId("local".to_owned()));
     assert!(imported_layout.manifest_db.exists());
     assert!(imported_layout.index_dir.join("index.db").exists());
 
@@ -123,14 +133,17 @@ fn temp_dir(prefix: &str) -> PathBuf {
         .map(|duration| duration.as_nanos())
         .unwrap_or_default();
     let counter = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-    std::env::temp_dir().join(prefix).join(format!("{suffix}"))
+    std::env::temp_dir()
+        .join(prefix)
+        .join(format!("{suffix}"))
         .join(format!("{}-{counter}", std::process::id()))
 }
 
 fn write_fixture(root: &Path, relative: &str, content: &str) {
     let path = root.join(relative);
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).unwrap_or_else(|error| panic!("fixture parent should create: {error}"));
+        fs::create_dir_all(parent)
+            .unwrap_or_else(|error| panic!("fixture parent should create: {error}"));
     }
     fs::write(path, content).unwrap_or_else(|error| panic!("fixture should write: {error}"));
 }

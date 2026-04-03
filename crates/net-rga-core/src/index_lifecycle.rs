@@ -168,6 +168,13 @@ fn index_layout(paths: &RuntimePaths, corpus_id: &str) -> Result<StateLayout, In
     ))
 }
 
+fn timestamp_now() -> String {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs().to_string())
+        .unwrap_or_else(|_| "0".to_owned())
+}
+
 #[cfg(test)]
 mod tests {
     use std::env;
@@ -177,9 +184,11 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use crate::config::{CorpusConfig, ProviderConfig};
+    use crate::providers::provider_from_config;
     use crate::runtime::{ConfigStore, RuntimePaths};
+    use crate::sync::sync_corpus;
 
-    use super::{clear_index, index_status};
+    use super::{build_index, clear_index, index_status, rebuild_index};
 
     static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -244,11 +253,104 @@ mod tests {
 
         fs::remove_dir_all(state_root).ok();
     }
-}
 
-fn timestamp_now() -> String {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_secs().to_string())
-        .unwrap_or_else(|_| "0".to_owned())
+    #[test]
+    fn build_index_populates_health_metadata_and_document_count() {
+        let state_root = temp_state_root();
+        let corpus_root = state_root.join("fixtures");
+        fs::create_dir_all(corpus_root.join("docs"))
+            .unwrap_or_else(|error| panic!("fixture dir should create: {error}"));
+        fs::write(
+            corpus_root.join("docs/report.txt"),
+            "riverglass appears here",
+        )
+        .unwrap_or_else(|error| panic!("fixture should write: {error}"));
+
+        let paths = RuntimePaths::from_state_root(state_root.clone());
+        let store = ConfigStore::new(paths.clone());
+        let provider_config = ProviderConfig::LocalFs {
+            root: corpus_root.clone(),
+        };
+        store
+            .add_corpus(CorpusConfig {
+                id: "local".to_owned(),
+                display_name: Some("Local".to_owned()),
+                provider: provider_config.clone(),
+                include_globs: Vec::new(),
+                exclude_globs: Vec::new(),
+                backend: None,
+            })
+            .unwrap_or_else(|error| panic!("corpus should save: {error}"));
+
+        sync_corpus(&paths, "local").unwrap_or_else(|error| panic!("sync should succeed: {error}"));
+        let provider = provider_from_config(&provider_config)
+            .unwrap_or_else(|error| panic!("provider should build: {error}"));
+
+        let summary = build_index(&paths, "local", provider.as_ref())
+            .unwrap_or_else(|error| panic!("index build should succeed: {error}"));
+        let status = index_status(&paths, "local")
+            .unwrap_or_else(|error| panic!("status should succeed: {error}"));
+
+        assert_eq!(summary.indexed_documents, 1);
+        assert_eq!(summary.failed_documents, 0);
+        assert!(status.present);
+        assert_eq!(status.indexed_documents, 1);
+        assert_eq!(status.update_strategy.as_deref(), Some("manual_build"));
+        assert_eq!(status.backend_kind.as_deref(), Some("embedded_sqlite_fts5"));
+        assert!(status.last_build_started_at.is_some());
+        assert!(status.last_build_completed_at.is_some());
+
+        fs::remove_dir_all(state_root).ok();
+    }
+
+    #[test]
+    fn rebuild_index_recreates_cleared_index() {
+        let state_root = temp_state_root();
+        let corpus_root = state_root.join("fixtures");
+        fs::create_dir_all(corpus_root.join("docs"))
+            .unwrap_or_else(|error| panic!("fixture dir should create: {error}"));
+        fs::write(
+            corpus_root.join("docs/report.txt"),
+            "riverglass appears here",
+        )
+        .unwrap_or_else(|error| panic!("fixture should write: {error}"));
+
+        let paths = RuntimePaths::from_state_root(state_root.clone());
+        let store = ConfigStore::new(paths.clone());
+        let provider_config = ProviderConfig::LocalFs {
+            root: corpus_root.clone(),
+        };
+        store
+            .add_corpus(CorpusConfig {
+                id: "local".to_owned(),
+                display_name: Some("Local".to_owned()),
+                provider: provider_config.clone(),
+                include_globs: Vec::new(),
+                exclude_globs: Vec::new(),
+                backend: None,
+            })
+            .unwrap_or_else(|error| panic!("corpus should save: {error}"));
+
+        sync_corpus(&paths, "local").unwrap_or_else(|error| panic!("sync should succeed: {error}"));
+        let provider = provider_from_config(&provider_config)
+            .unwrap_or_else(|error| panic!("provider should build: {error}"));
+
+        build_index(&paths, "local", provider.as_ref())
+            .unwrap_or_else(|error| panic!("initial build should succeed: {error}"));
+        assert!(
+            clear_index(&paths, "local")
+                .unwrap_or_else(|error| panic!("clear should succeed: {error}"))
+        );
+
+        let summary = rebuild_index(&paths, "local", provider.as_ref())
+            .unwrap_or_else(|error| panic!("rebuild should succeed: {error}"));
+        let status = index_status(&paths, "local")
+            .unwrap_or_else(|error| panic!("status should succeed: {error}"));
+
+        assert_eq!(summary.indexed_documents, 1);
+        assert!(status.present);
+        assert_eq!(status.indexed_documents, 1);
+
+        fs::remove_dir_all(state_root).ok();
+    }
 }

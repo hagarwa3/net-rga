@@ -691,7 +691,7 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use net_rga_core::{
-        ConfigStore, CorpusConfig, ProviderConfig, RuntimePaths, SearchOutputFormat,
+        ConfigStore, CorpusConfig, ProviderConfig, RuntimePaths, SearchOutputFormat, build_index,
     };
 
     use super::{
@@ -1125,6 +1125,53 @@ mod tests {
         assert!(output.contains("provider=local_fs"));
         assert!(output.contains("documents=1"));
         assert!(output.contains("last_sync_completed_at="));
+
+        fs::remove_dir_all(state_root).ok();
+    }
+
+    #[test]
+    fn inspect_reports_index_health_when_index_is_built() {
+        let state_root = temp_state_root();
+        let corpus_root = state_root.join("fixtures");
+        fs::create_dir_all(corpus_root.join("docs"))
+            .unwrap_or_else(|error| panic!("fixture dir should create: {error}"));
+        fs::write(
+            corpus_root.join("docs/report.txt"),
+            "riverglass appears here",
+        )
+        .unwrap_or_else(|error| panic!("fixture should write: {error}"));
+
+        let paths = RuntimePaths::from_state_root(state_root.clone());
+        let store = ConfigStore::new(paths.clone());
+        let provider_config = ProviderConfig::LocalFs {
+            root: corpus_root.clone(),
+        };
+        store
+            .add_corpus(CorpusConfig {
+                id: "local".to_owned(),
+                display_name: Some("Local".to_owned()),
+                provider: provider_config.clone(),
+                include_globs: Vec::new(),
+                exclude_globs: Vec::new(),
+                backend: None,
+            })
+            .unwrap_or_else(|error| panic!("corpus should save: {error}"));
+        handle_sync_with_paths(&paths, "local")
+            .unwrap_or_else(|error| panic!("sync should succeed: {error}"));
+        let provider = net_rga_core::providers::provider_from_config(&provider_config)
+            .unwrap_or_else(|error| panic!("provider should build: {error}"));
+        build_index(&paths, "local", provider.as_ref())
+            .unwrap_or_else(|error| panic!("index build should succeed: {error}"));
+
+        let output = handle_inspect_with_paths(&paths, "local")
+            .unwrap_or_else(|error| panic!("inspect should succeed: {error}"));
+
+        assert!(output.contains("index_present=true"));
+        assert!(output.contains("index_update_strategy=manual_build"));
+        assert!(output.contains("index_backend=embedded_sqlite_fts5"));
+        assert!(output.contains("index_documents=1"));
+        assert!(output.contains("index_last_build_started_at="));
+        assert!(output.contains("index_last_build_completed_at="));
 
         fs::remove_dir_all(state_root).ok();
     }

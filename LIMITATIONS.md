@@ -20,7 +20,7 @@ This file tracks the current v0/MVP boundaries for `net-rga`.
 
 - search is lexical-first only; there is no semantic/vector retrieval path in v0
 - regex queries do not benefit from the local lexical sidecar
-- the local lexical sidecar is populated opportunistically from verified reads rather than by a full background indexing job
+- the local lexical sidecar is explicit-build only; there is no background incremental update loop yet
 - ignore-file compatibility is not yet at ripgrep parity
 
 ### Document extraction
@@ -43,7 +43,6 @@ These are intentionally postponed beyond v0:
 - connector set beyond local filesystem and S3/S3-compatible
 - event-driven freshness and delta ingestion
 - background extraction workers
-- full index build/rebuild commands
 - semantic/vector backends
 - hosted indexing/query service
 - OCR and multimodal extraction
@@ -54,7 +53,7 @@ These are intentionally postponed beyond v0:
 
 If work continues beyond the current MVP, the highest-value next steps are:
 
-1. add a first-class `index build` / `index rebuild` workflow
+1. abstract the embedded lexical sidecar more cleanly behind interchangeable local and hosted backends
 2. improve plain-text rendering for non-line anchors
 3. add credential-aware S3 CLI ergonomics and more provider connectors
 4. expand freshness handling beyond manual sync plus partial coverage reporting

@@ -35,13 +35,13 @@ const INDEX_SCHEMA_VERSION: &str = "1";
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum IndexUpdateStrategy {
-    OnReadVerify,
+    ManualBuild,
 }
 
 impl IndexUpdateStrategy {
     fn as_str(&self) -> &'static str {
         match self {
-            Self::OnReadVerify => "on_read_verify",
+            Self::ManualBuild => "manual_build",
         }
     }
 }
@@ -76,10 +76,8 @@ impl LexicalIndex {
         connection.execute_batch(INDEX_SCHEMA_V1)?;
         let index = Self { connection };
         index.write_health_metadata("schema_version", INDEX_SCHEMA_VERSION)?;
-        index.write_health_metadata(
-            "update_strategy",
-            IndexUpdateStrategy::OnReadVerify.as_str(),
-        )?;
+        index
+            .write_health_metadata("update_strategy", IndexUpdateStrategy::ManualBuild.as_str())?;
         Ok(index)
     }
 
@@ -277,7 +275,7 @@ mod tests {
         );
         assert_eq!(
             index.update_strategy().unwrap_or_default().as_deref(),
-            Some(IndexUpdateStrategy::OnReadVerify.as_str())
+            Some(IndexUpdateStrategy::ManualBuild.as_str())
         );
 
         fs::remove_file(path).ok();

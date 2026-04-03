@@ -167,6 +167,25 @@ Show local state for a corpus:
 - tombstones
 - failure count
 - last sync timestamps
+- index backend, update strategy, and last-build metadata
+
+### `index`
+
+Manage the optional local lexical sidecar explicitly:
+
+```bash
+net-rga index build <corpus>
+net-rga index rebuild <corpus>
+net-rga index clear <corpus>
+net-rga index status <corpus>
+```
+
+The local index is an embedded SQLite FTS5 sidecar. It is not authoritative for match truth:
+
+- `search` may use it to prioritize candidates
+- final provider-side verification still determines whether a match is real
+- `index build` and `index rebuild` are the supported ways to populate it intentionally
+- missing or stale index state should not make lexical search incorrect; it only removes acceleration
 
 ### `export` / `import`
 
@@ -209,7 +228,7 @@ For a corpus id like `local`, state is stored under:
 
 The manifest is the source of truth for synced namespace state.
 
-The lexical index is optional and currently updated opportunistically from verified reads.
+The lexical index is optional and currently built explicitly with `net-rga index build` or `net-rga index rebuild`.
 
 ## Benchmarks
 
