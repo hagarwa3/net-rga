@@ -935,12 +935,14 @@ Deliverables:
 - provider-matrix runs across local FS and S3-compatible storage
 - Tier 3 freshness-chaos execution
 - benchmark gating policy for indexed/unindexed and local/remote comparisons
+- local-fs baseline comparison runs against `rg` and, where available, `rga`
 
 Acceptance criteria:
 
 - Benchmark runs cover local FS and S3-compatible modes
 - Benchmark reports distinguish planner, backend, fetch, and extraction costs
 - New backend and rendering changes can be judged against stable regression gates
+- Local-fs benchmark reporting makes `net-rga` overhead and extraction tradeoffs visible against `rg`/`rga` baselines
 
 Checklist:
 
@@ -948,6 +950,7 @@ Checklist:
 - [ ] Run the provider matrix suite against local FS and S3-compatible storage
 - [ ] Run Tier 3 freshness-chaos scenarios end to end
 - [ ] Add indexed-on vs indexed-off benchmark comparisons
+- [ ] Add local-fs baseline comparison runs for `net-rga` vs `rg`, and `rga` where available
 - [ ] Define hard and soft benchmark regression thresholds for CI and nightly use
 
 ### Phase 11: S3 ergonomics and connector-ready UX
@@ -1008,6 +1011,7 @@ The full benchmark suite remains later work. The project should not block on bui
 - Performance sanity checks for sync throughput and time-to-first-match
 - Golden benchmark runs from the benchmark scaffold for exact correctness and early latency/cost baselines
 - Microbenchmarks and benchmark reports that split traversal/filtering cost from fetch/extraction/verification cost
+- Local-fs baseline comparison reports against `rg` and, where installed, `rga`
 
 ### Required scenarios
 
