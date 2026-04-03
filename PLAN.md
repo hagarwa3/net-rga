@@ -863,7 +863,7 @@ Checklist:
 - [x] Add `index status` command
 - [x] Refactor the current SQLite FTS index into a `SearchBackend` implementation
 - [x] Store index health and last-build metadata for `inspect`
-- [ ] Add indexed vs unindexed benchmark runs to Tier 0 and Tier 1
+- [x] Add indexed vs unindexed benchmark runs to Tier 0 and Tier 1
 
 ### Phase 8: Hosted backend prototype
 

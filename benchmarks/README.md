@@ -29,6 +29,7 @@ benchmarks/
     tier1/
     tier3/
   materialize_tier0_corpus.py
+  materialize_tier1_mixed_small.py
   mutations/
     tier0/
     tier3/
@@ -105,12 +106,20 @@ Current commands:
 
 ```bash
 python3 benchmarks/materialize_tier0_corpus.py
-python3 benchmarks/harness.py run
+python3 benchmarks/materialize_tier1_mixed_small.py
+python3 benchmarks/harness.py run --backend-mode disabled
+python3 benchmarks/harness.py run --cases benchmarks/cases/tier1/mixed_small --backend-mode enabled
 python3 benchmarks/harness.py compare path/to/before.json path/to/after.json
 ./benchmarks/run_tier0.sh
+./benchmarks/run_tier1_mixed_small.sh
 ```
 
-The initial harness is only expected to support the Tier 0 local-filesystem golden corpus. It exists to give the project stable machine-readable baseline results before the main Rust implementation lands.
+The current harness supports executable local-filesystem runs for:
+
+- Tier 0 deterministic golden cases
+- Tier 1 mixed-small PDF and DOCX cases
+
+It still does not execute the provider-matrix or freshness-chaos suites; those remain tracked definitions until later phases.
 
 The same scaffold is wired into a lightweight GitHub Actions workflow so the Tier 0 benchmark can run in fast CI before the main engine exists.
 
@@ -118,7 +127,6 @@ The same scaffold is wired into a lightweight GitHub Actions workflow so the Tie
 
 The next benchmark implementation pass should add:
 
-- a mixed-format corpus materializer for `tier1/mixed_small`
 - a provider-matrix runner that reuses one judgment set across local-fs and S3-compatible modes
 - a mutation applicator for `tier3/freshness_chaos`
 - baseline result manifests for the new suites under ignored local `benchmarks/results/`

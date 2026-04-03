@@ -13,6 +13,8 @@ import stat
 import sys
 import tempfile
 import time
+import xml.etree.ElementTree as ET
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -21,6 +23,7 @@ ROOT = Path(__file__).resolve().parent.parent
 BENCHMARK_ROOT = ROOT / "benchmarks"
 CORPUS_ROOTS = {
     "tier0.local_fs": BENCHMARK_ROOT / "data" / "tier0" / "local_fs",
+    "tier1.local_fs.mixed_small": BENCHMARK_ROOT / "data" / "tier1" / "local_fs" / "mixed_small",
 }
 UNSUPPORTED_EXTENSIONS = {
     "avi",
@@ -29,7 +32,6 @@ UNSUPPORTED_EXTENSIONS = {
     "jpg",
     "mov",
     "mp4",
-    "pdf",
     "png",
 }
 
@@ -118,7 +120,11 @@ def cleanup_mutation(corpus_root: Path, mutation_set_id: str | None) -> None:
         target.chmod(stat.S_IRUSR | stat.S_IWUSR)
 
 
-def search_file(path: Path, corpus_root: Path, pattern: re.Pattern[str]) -> tuple[list[dict], int]:
+def local_name(tag: str) -> str:
+    return tag.rsplit("}", 1)[-1]
+
+
+def search_text_document(path: Path, corpus_root: Path, pattern: re.Pattern[str]) -> tuple[list[dict], int, int]:
     content = path.read_text(encoding="utf-8")
     snippets = []
     for line_number, line in enumerate(content.splitlines(), start=1):
@@ -127,28 +133,141 @@ def search_file(path: Path, corpus_root: Path, pattern: re.Pattern[str]) -> tupl
         snippets.append(
             {
                 "document_id": relative_path(path, corpus_root),
+                "anchor_kind": "line_span",
+                "path": relative_path(path, corpus_root),
                 "line_start": line_number,
                 "line_end": line_number,
                 "snippet": line,
             }
         )
-    return snippets, len(content.encode("utf-8"))
+    raw_bytes = path.stat().st_size
+    return snippets, raw_bytes, len(content.encode("utf-8"))
+
+
+def extract_docx_paragraphs(path: Path) -> list[str]:
+    with zipfile.ZipFile(path) as archive:
+        xml = archive.read("word/document.xml")
+    root = ET.fromstring(xml)
+    paragraphs = []
+    for paragraph in root.iter():
+        if local_name(paragraph.tag) != "p":
+            continue
+        text = "".join(node.text or "" for node in paragraph.iter() if local_name(node.tag) == "t").strip()
+        if text:
+            paragraphs.append(text)
+    return paragraphs
+
+
+def search_docx_document(path: Path, corpus_root: Path, pattern: re.Pattern[str]) -> tuple[list[dict], int, int]:
+    paragraphs = extract_docx_paragraphs(path)
+    matches = []
+    extracted_text = []
+    for index, paragraph in enumerate(paragraphs, start=1):
+        extracted_text.append(paragraph)
+        if not pattern.search(paragraph):
+            continue
+        matches.append(
+            {
+                "document_id": relative_path(path, corpus_root),
+                "anchor_kind": "chunk_span",
+                "path": relative_path(path, corpus_root),
+                "chunk_id": f"paragraph-{index}",
+                "snippet": paragraph,
+            }
+        )
+    extracted_bytes = len("\n".join(extracted_text).encode("utf-8"))
+    return matches, path.stat().st_size, extracted_bytes
+
+
+def decode_pdf_literal(raw: bytes) -> str:
+    output = bytearray()
+    index = 0
+    while index < len(raw):
+        byte = raw[index]
+        if byte == 0x5C and index + 1 < len(raw):
+            next_byte = raw[index + 1]
+            if next_byte in (0x5C, 0x28, 0x29):
+                output.append(next_byte)
+                index += 2
+                continue
+        output.append(byte)
+        index += 1
+    return output.decode("utf-8")
+
+
+def extract_pdf_pages(path: Path) -> list[str]:
+    payload = path.read_bytes()
+    streams = re.findall(rb"stream\n(.*?)\nendstream", payload, re.DOTALL)
+    pages = []
+    for stream in streams:
+        fragments = []
+        for literal in re.findall(rb"\(((?:\\.|[^\\)])*)\)\s*Tj", stream):
+            fragments.append(decode_pdf_literal(literal))
+        page_text = " ".join(fragment.strip() for fragment in fragments if fragment.strip()).strip()
+        if page_text:
+            pages.append(page_text)
+    return pages
+
+
+def search_pdf_document(path: Path, corpus_root: Path, pattern: re.Pattern[str]) -> tuple[list[dict], int, int]:
+    pages = extract_pdf_pages(path)
+    matches = []
+    extracted_text = []
+    for index, page_text in enumerate(pages, start=1):
+        extracted_text.append(page_text)
+        if not pattern.search(page_text):
+            continue
+        matches.append(
+            {
+                "document_id": relative_path(path, corpus_root),
+                "anchor_kind": "page_span",
+                "path": relative_path(path, corpus_root),
+                "page": index,
+                "snippet": page_text,
+            }
+        )
+    extracted_bytes = len("\n".join(extracted_text).encode("utf-8"))
+    return matches, path.stat().st_size, extracted_bytes
+
+
+def search_document(path: Path, corpus_root: Path, pattern: re.Pattern[str]) -> tuple[list[dict], int, int]:
+    suffix = path.suffix.lower()
+    if suffix == ".docx":
+        return search_docx_document(path, corpus_root, pattern)
+    if suffix == ".pdf":
+        return search_pdf_document(path, corpus_root, pattern)
+    return search_text_document(path, corpus_root, pattern)
 
 
 def evaluate_anchor(actual_result: dict, anchor: dict) -> str:
-    if anchor["anchor_kind"] != "line_span":
-        return "nearby"
-    locator = anchor["locator"]
-    actual_start = actual_result["line_start"]
-    actual_end = actual_result["line_end"]
-    expected_start = locator.get("line_start", actual_start)
-    expected_end = locator.get("line_end", actual_end)
     tolerance = anchor.get("tolerance", "exact")
-    if tolerance == "exact":
-        return "pass" if actual_start == expected_start and actual_end == expected_end else "fail"
-    if tolerance == "same_container":
-        return "pass" if expected_start <= actual_start <= expected_end else "fail"
-    return "pass" if abs(actual_start - expected_start) <= 1 else "fail"
+    anchor_kind = anchor["anchor_kind"]
+    locator = anchor["locator"]
+
+    if anchor_kind == "line_span":
+        actual_start = actual_result["line_start"]
+        actual_end = actual_result["line_end"]
+        expected_start = locator.get("line_start", actual_start)
+        expected_end = locator.get("line_end", actual_end)
+        if tolerance == "exact":
+            return "pass" if actual_start == expected_start and actual_end == expected_end else "fail"
+        if tolerance == "same_container":
+            return "pass" if expected_start <= actual_start <= expected_end else "fail"
+        return "pass" if abs(actual_start - expected_start) <= 1 else "fail"
+
+    if anchor_kind == "page_span":
+        actual_page = actual_result.get("page")
+        expected_page = locator.get("page")
+        return "pass" if actual_page == expected_page else "fail"
+
+    if anchor_kind == "chunk_span":
+        actual_chunk_id = actual_result.get("chunk_id")
+        expected_chunk_id = locator.get("chunk_id")
+        if tolerance in {"exact", "same_container"}:
+            return "pass" if actual_chunk_id == expected_chunk_id else "fail"
+        return "nearby" if actual_chunk_id and expected_chunk_id else "fail"
+
+    return "nearby"
 
 
 def evaluate_case(case: dict, judgment: dict, actual_results: list[dict], coverage: dict) -> dict:
@@ -301,7 +420,7 @@ def run_case(case: dict, judgment_lookup: dict[str, dict]) -> dict:
                 continue
             read_calls += 1
             try:
-                matches, extracted = search_file(path, corpus_root, pattern)
+                matches, fetched_bytes, extracted = search_document(path, corpus_root, pattern)
             except PermissionError:
                 denied_count += 1
                 continue
@@ -312,7 +431,7 @@ def run_case(case: dict, judgment_lookup: dict[str, dict]) -> dict:
                 failure_count += 1
                 errors.append(str(exc))
                 continue
-            bytes_fetched += extracted
+            bytes_fetched += fetched_bytes
             extracted_bytes += extracted
             if matches and first_verified_ms == 0.0:
                 first_verified_ms = (time.perf_counter() - start) * 1000.0
@@ -374,11 +493,10 @@ def run_case(case: dict, judgment_lookup: dict[str, dict]) -> dict:
     }
 
 
-def load_judgment_lookup(case_paths: list[Path]) -> dict[str, dict]:
+def load_judgment_lookup(cases: list[dict]) -> dict[str, dict]:
     lookup = {}
     loaded_files = {}
-    for case_path in case_paths:
-        case = load_json(case_path)
+    for case in cases:
         judgment_file = ROOT / case["expected_results"]["judgment_file"]
         if judgment_file not in loaded_files:
             payload = load_json(judgment_file)
@@ -387,10 +505,56 @@ def load_judgment_lookup(case_paths: list[Path]) -> dict[str, dict]:
     return lookup
 
 
-def run_suite(case_dir: Path, output_path: Path) -> int:
+def filter_cases(
+    cases: list[dict],
+    backend_mode: str | None,
+    provider_mode: str | None,
+) -> list[dict]:
+    filtered = []
+    for case in cases:
+        run_mode = case["run_mode"]
+        if backend_mode and run_mode["backend_mode"] != backend_mode:
+            continue
+        if provider_mode and run_mode["provider_mode"] != provider_mode:
+            continue
+        filtered.append(case)
+    return filtered
+
+
+def require_single_value(cases: list[dict], label: str, selector) -> str:
+    values = {selector(case) for case in cases}
+    if len(values) != 1:
+        raise ValueError(f"benchmark run must be homogeneous for {label}, found: {sorted(values)}")
+    return values.pop()
+
+
+def build_run_mode(cases: list[dict]) -> dict:
+    network_profiles = {
+        case["run_mode"].get("network_profile", "not_applicable") for case in cases
+    }
+    if len(network_profiles) != 1:
+        raise ValueError(
+            f"benchmark run must be homogeneous for network_profile, found: {sorted(network_profiles)}"
+        )
+    return {
+        "provider_mode": require_single_value(cases, "provider_mode", lambda case: case["run_mode"]["provider_mode"]),
+        "manifest_state": require_single_value(cases, "manifest_state", lambda case: case["run_mode"]["manifest_state"]),
+        "content_cache_state": require_single_value(
+            cases,
+            "content_cache_state",
+            lambda case: case["run_mode"]["content_cache_state"],
+        ),
+        "backend_mode": require_single_value(cases, "backend_mode", lambda case: case["run_mode"]["backend_mode"]),
+        "network_profile": network_profiles.pop(),
+    }
+
+
+def run_suite(case_dir: Path, output_path: Path, backend_mode: str | None, provider_mode: str | None) -> int:
     case_paths = iter_case_paths(case_dir)
-    cases = [load_json(path) for path in case_paths]
-    judgment_lookup = load_judgment_lookup(case_paths)
+    cases = filter_cases([load_json(path) for path in case_paths], backend_mode, provider_mode)
+    if not cases:
+        raise ValueError("no benchmark cases matched the selected filters")
+    judgment_lookup = load_judgment_lookup(cases)
     git_commit = "unknown"
     dirty = False
     try:
@@ -409,7 +573,14 @@ def run_suite(case_dir: Path, output_path: Path) -> int:
 
     query_results = [run_case(case, judgment_lookup) for case in cases]
     totals = [entry["latency_ms"]["total"] for entry in query_results]
-    first_verified = [entry["latency_ms"]["first_verified_match"] for entry in query_results if entry["latency_ms"]["first_verified_match"] > 0]
+    first_verified = [
+        entry["latency_ms"]["first_verified_match"]
+        for entry in query_results
+        if entry["latency_ms"]["first_verified_match"] > 0
+    ]
+    suite_id = require_single_value(cases, "suite_id", lambda case: case["suite_id"])
+    corpus_id = require_single_value(cases, "corpus_id", lambda case: case["corpus_id"])
+    run_mode_payload = build_run_mode(cases)
     aggregate = {
         "query_count": len(query_results),
         "pass_count": sum(1 for entry in query_results if entry["status"] == "passed"),
@@ -431,21 +602,15 @@ def run_suite(case_dir: Path, output_path: Path) -> int:
     }
     report = {
         "schema_version": "1.0",
-        "run_id": f"tier0-{int(time.time())}",
-        "suite_id": "tier0-golden",
+        "run_id": f"{suite_id}-{run_mode_payload['backend_mode']}-{int(time.time())}",
+        "suite_id": suite_id,
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "corpus_id": "tier0.local_fs",
+        "corpus_id": corpus_id,
         "tool_revision": {
             "git_commit": git_commit,
             "dirty": dirty,
         },
-        "run_mode": {
-            "provider_mode": "local_fs",
-            "manifest_state": "warm",
-            "content_cache_state": "not_applicable",
-            "backend_mode": "disabled",
-            "network_profile": "not_applicable",
-        },
+        "run_mode": run_mode_payload,
         "query_results": query_results,
         "aggregate_metrics": aggregate,
     }
@@ -494,6 +659,18 @@ def parse_args() -> argparse.Namespace:
         default=str(BENCHMARK_ROOT / "results" / "tier0_local_fs.json"),
         help="output report path",
     )
+    run_parser.add_argument(
+        "--backend-mode",
+        choices=["disabled", "enabled"],
+        default="disabled",
+        help="run only cases for the selected backend mode",
+    )
+    run_parser.add_argument(
+        "--provider-mode",
+        choices=["local_fs", "s3_compatible", "s3", "corpus_default"],
+        default=None,
+        help="run only cases for the selected provider mode",
+    )
 
     compare_parser = subparsers.add_parser("compare", help="compare two benchmark reports")
     compare_parser.add_argument("before")
@@ -504,7 +681,12 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     if args.command == "run":
-        return run_suite(Path(args.cases), Path(args.output))
+        return run_suite(
+            Path(args.cases),
+            Path(args.output),
+            args.backend_mode,
+            args.provider_mode,
+        )
     return compare_reports(Path(args.before), Path(args.after))
 
 
